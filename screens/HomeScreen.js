@@ -1,0 +1,986 @@
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Dimensions,
+  ActivityIndicator,
+  TextInput,
+  Alert,
+  Platform,
+  AppState,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import * as MediaLibrary from 'expo-media-library';
+import { Image } from 'expo-image';
+import { Ionicons } from '@expo/vector-icons';
+import { NativeModules } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import DropdownMenu from '../components/DropdownMenu';
+import SideSettingsPanel from '../components/SideSettingsPanel';
+import { useDialog } from '../contexts/DialogContext';
+
+import { useTheme } from '../contexts/ThemeContext';
+import { useVault } from '../contexts/VaultContext';
+import { removeMediaFromVault } from '../services/vaultService';
+import { filterVaultMedia, moveMediaToVault } from '../services/mediaService';
+import { moveMediaToAppTrash } from '../services/trashService';
+import { addMediaToFolder } from '../services/folderService';
+
+const { width } = Dimensions.get('window');
+const NUM_COLUMNS = 3;
+const GAP = 3;
+const ITEM_SIZE = (width - GAP * (NUM_COLUMNS + 1)) / NUM_COLUMNS;
+
+// Memoized MediaItem component for performance - defined outside to avoid hooks issues
+const MediaItem = React.memo(({ item, index, isSelected, onPress, onLongPress, colors }) => {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      style={[
+        styles.item,
+        { backgroundColor: colors.itemBackground },
+        isSelected && styles.itemSelected
+      ]}
+      onPress={onPress}
+      onLongPress={onLongPress}
+    >
+      <Image
+        source={{ uri: item.uri }}
+        style={styles.image}
+        contentFit="cover"
+        transition={0} // Step 4.2: Optimize thumbnails
+        cachePolicy="memory-disk"
+        key={`${item.id}_${item.uri}`}
+      />
+
+      {/* Light blue overlay when selected */}
+      {isSelected && (
+        <View style={styles.selectionOverlay} />
+      )}
+
+      {/* Check icon at top-right when selected */}
+      {isSelected && (
+        <View style={styles.checkBadge}>
+          <Ionicons name="checkmark" size={18} color="#fff" />
+        </View>
+      )}
+
+      {(item.mediaType === 'video' || item.mediaType === MediaLibrary.MediaType.video || (item.duration && item.duration > 0)) && (
+        <View style={styles.videoBadge}>
+          <Ionicons name="play" size={16} color="#fff" />
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
+
+export default function HomeScreen({ navigation, route }) {
+  // All hooks must be called before any conditional returns
+  const { colors } = useTheme();
+  const { isVaultSetup, verifyPassword, unlockVault, isVaultUnlocked } = useVault();
+  const [media, setMedia] = useState([]);
+  const [loading, setLoading] = useState(false); // Start with false to show UI immediately
+  const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [settingsPanelVisible, setSettingsPanelVisible] = useState(false);
+  const menuButtonRef = useRef(null);
+  const [menuAnchorPosition, setMenuAnchorPosition] = useState({ x: 16, y: 50 });
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectionPurpose, setSelectionPurpose] = useState(undefined); // undefined | 'vaultAdd' | 'folderAdd'
+  const [selectedItems, setSelectedItems] = useState(new Set());
+  const [targetFolderId, setTargetFolderId] = useState(null);
+  const [targetFolderName, setTargetFolderName] = useState(null);
+  const [pageInfo, setPageInfo] = useState({ hasNextPage: true, endCursor: undefined });
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Dialog Context
+  const { showConfirm, showAlert } = useDialog();
+
+  // Memoized values - must be after all useState hooks
+  const filteredMedia = useMemo(() => {
+    if (!query) return media;
+    const q = query.toLowerCase();
+    return media.filter(m =>
+      (m.filename || '').toLowerCase().includes(q)
+    );
+  }, [query, media]);
+
+  // Handle Vault Add Mode from route params - using useFocusEffect to ensure it triggers on tab switch
+  useFocusEffect(
+    useCallback(() => {
+      if (route?.params?.selectionPurpose === 'vaultAdd') {
+        setIsSelectionMode(true);
+        setSelectionPurpose('vaultAdd');
+        setSelectedItems(new Set());
+        setQuery(''); // Clear any search query preventing visibility
+
+        // Force load if empty (e.g. first time access via Vault) - but don't show loader
+        if (media.length === 0) {
+          console.log('Media empty in Vault Add mode - forcing load without loader');
+          loadGallery(false); // Don't show loading screen
+        }
+      } else if (route?.params?.selectionPurpose === 'folderAdd') {
+        setIsSelectionMode(true);
+        setSelectionPurpose('folderAdd');
+        setTargetFolderId(route.params.targetFolderId);
+        setTargetFolderName(route.params.targetFolderName);
+        setSelectedItems(new Set());
+        setQuery('');
+
+        if (media.length === 0) {
+          loadGallery(false); // Don't show loading screen
+        }
+      }
+    }, [route?.params?.selectionPurpose, navigation, media.length])
+  );
+
+  // Incremental update when returning from crop OR app focus - NO full reload
+  useFocusEffect(
+    useCallback(() => {
+      const syncNewMedia = async () => {
+        try {
+          // 1. Handle explicit cropped asset return (existing logic)
+          if (route?.params?.croppedAsset) {
+            console.log("HomeScreen: Focused with croppedAsset param", route.params);
+            const { croppedAsset } = route.params;
+
+            // Clear the params immediately
+            navigation.setParams({ croppedAsset: undefined, originalAssetId: undefined });
+
+            setMedia(prev => {
+              // Check if it already exists (prevent duplicates if scanner was fast)
+              if (prev.some(item => item.id?.toString() === croppedAsset.id?.toString())) {
+                return prev;
+              }
+
+              // We add the cropped asset to the top for immediate visibility
+              const newAsset = {
+                ...croppedAsset,
+                uri: croppedAsset.uri || croppedAsset.localUri,
+                mediaType: 'photo',
+                creationTime: croppedAsset.creationTime || Date.now() // Fallback for sorting
+              };
+
+              return [newAsset, ...prev];
+            });
+          }
+
+          // 2. Incremental Sync: Check for ANY new system media (e.g. screenshots)
+          // Fetch only the latest 10 items to minimize performance impact
+          const result = await MediaLibrary.getAssetsAsync({
+            first: 10,
+            sortBy: [MediaLibrary.SortBy.creationTime], // Strict chronological
+            mediaType: MediaLibrary.MediaType.all,
+          });
+
+          const latestAssets = result.assets;
+
+          if (latestAssets.length > 0) {
+            setMedia(prev => {
+              // If existing list is empty, just let loadGallery handle it (or do nothing)
+              if (prev.length === 0) return prev;
+
+              // Find items in latestAssets that are NOT in 'prev'
+              // We assume 'prev' is sorted newest first. 
+              // Optimization: Filter latestAssets against the first ~50 items of 'prev'.
+
+              const existingHeadIds = new Set(prev.slice(0, 50).map(m => m.id));
+              const newItems = latestAssets.filter(asset => !existingHeadIds.has(asset.id));
+
+              if (newItems.length > 0) {
+                console.log(`HomeScreen: Found ${newItems.length} new incoming assets via sync.`);
+                // Prepend new items
+                return [...newItems, ...prev];
+              }
+
+              return prev;
+            });
+          }
+
+        } catch (error) {
+          console.warn("HomeScreen: Incremental sync failed", error);
+        }
+      };
+
+      // Run the sync initially on focus
+      syncNewMedia();
+
+      // Also listen for AppState changes to handle returning from background (e.g. after screenshot)
+      const subscription = AppState.addEventListener('change', nextAppState => {
+        if (nextAppState === 'active') {
+          console.log('HomeScreen: App active - Triggering incremental sync');
+          syncNewMedia();
+        }
+      });
+
+      return () => {
+        subscription.remove();
+      };
+
+    }, [route?.params?.croppedAsset, navigation])
+  );
+
+  const isSelectionModeRef = useRef(isSelectionMode);
+  const shareInProgressRef = useRef(false); // Guard to prevent share loops
+
+  useEffect(() => {
+    isSelectionModeRef.current = isSelectionMode;
+  }, [isSelectionMode]);
+
+  const handleLongPress = useCallback((item) => {
+    if (!isSelectionModeRef.current) {
+      setIsSelectionMode(true);
+      setSelectedItems(new Set([item.id.toString()]));
+    }
+  }, []);
+
+  const handleItemPress = useCallback((item, index) => {
+    if (isSelectionModeRef.current) {
+      // Toggle selection
+      const itemId = item.id.toString();
+      setSelectedItems(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(itemId)) {
+          newSet.delete(itemId);
+          // Exit selection mode if no items selected
+          if (newSet.size === 0) {
+            setIsSelectionMode(false);
+          }
+        } else {
+          newSet.add(itemId);
+        }
+        return newSet;
+      });
+    } else {
+      // Normal behavior - open viewer
+      navigation.navigate('Viewer', {
+        item,
+        allItems: filteredMedia,
+        initialIndex: index
+      });
+    }
+  }, [filteredMedia, navigation]);
+
+  const exitSelectionMode = useCallback(() => {
+    setIsSelectionMode(false);
+    setSelectionPurpose(undefined);
+    setSelectedItems(new Set());
+
+    // Clear navigation params explicitly
+    navigation.setParams({ selectionPurpose: undefined });
+
+    // If we were in vaultAdd mode, go back to Vault screen
+    if (selectionPurpose === 'vaultAdd') {
+      navigation.navigate('VaultHome');
+    } else if (selectionPurpose === 'folderAdd') {
+      navigation.navigate('FolderDetail', { folderId: targetFolderId, folderName: targetFolderName });
+    }
+  }, [selectionPurpose, navigation, targetFolderId, targetFolderName]);
+
+
+
+  const handleShareSelected = useCallback(async () => {
+    if (shareInProgressRef.current) return;
+
+    try {
+      shareInProgressRef.current = true;
+
+      const selectedIds = Array.from(selectedItems);
+      const selectedMedia = filteredMedia.filter(item => selectedIds.includes(item.id.toString()));
+
+      if (selectedMedia.length === 0) {
+        showAlert('Error', 'No items selected');
+        return;
+      }
+
+      // Collect asset URIs for Android native sharing
+      const uris = [];
+      for (const item of selectedMedia) {
+        if (item.id && !item.id.toString().startsWith('vault_')) {
+          // Use item.uri which is already a valid content:// URI for MediaLibrary assets on Android
+          if (item.uri) {
+            uris.push(item.uri);
+          }
+        }
+      }
+
+      if (uris.length === 0) {
+        showAlert('Error', 'No valid items to share');
+        return;
+      }
+
+      console.log(`HomeScreen: Sharing ${uris.length} items via NativeModules.MultiShare`);
+      console.log('Available NativeModules:', Object.keys(NativeModules)); // Debug: List all modules
+
+      // Exit selection mode
+      exitSelectionMode();
+
+      // Share using our custom native module (ONE intent)
+      if (NativeModules.MultiShare) {
+        await NativeModules.MultiShare.shareImages(uris);
+      } else {
+        console.warn('NativeModules.MultiShare not found, falling back to basic sharing');
+        // Handle fallback if needed, but here we expect the module to exist
+      }
+
+    } catch (error) {
+      // Ignore user cancellation errors
+      const errorMsg = error.message || '';
+      if (!errorMsg.includes('User did not share') && !errorMsg.includes('User cancelled')) {
+        console.error('HomeScreen: Share error:', error);
+        showAlert('Error', 'Failed to share items');
+      }
+    } finally {
+      // Safely reset guard after a delay to ensure Android intent processing completes
+      setTimeout(() => {
+        shareInProgressRef.current = false;
+      }, 1000);
+    }
+  }, [selectedItems, filteredMedia, exitSelectionMode, showAlert]);
+
+  const handleDeleteSelected = useCallback(() => {
+    if (selectedItems.size === 0) return;
+
+    showConfirm(
+      selectedItems.size > 1 ? `Delete ${selectedItems.size} items?` : "Delete photo?",
+      "Items will be moved to trash.",
+      async () => {
+        try {
+          const selectedIds = Array.from(selectedItems);
+          const selectedMedia = filteredMedia.filter(item => selectedIds.includes(item.id.toString()));
+
+          console.log(`Deleting ${selectedMedia.length} items in batch...`);
+
+          const deletedIds = [];
+          const mediaLibraryIds = [];
+
+          // Step 1: Copy all items to trash (no permission needed)
+          for (const item of selectedMedia) {
+            try {
+              // Copy to app trash
+              const result = await moveMediaToAppTrash(item);
+              if (result) {
+                deletedIds.push(item.id.toString());
+                // Collect MediaLibrary IDs for batch delete
+                if (item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_')) {
+                  mediaLibraryIds.push(item.id);
+                }
+              }
+            } catch (trashError) {
+              console.error('Error copying item to trash:', item.id, trashError);
+            }
+          }
+
+          // Step 2: Delete all from MediaLibrary in ONE operation (asks permission once)
+          if (mediaLibraryIds.length > 0) {
+            try {
+              console.log(`Batch deleting ${mediaLibraryIds.length} items from MediaLibrary...`);
+              const { status } = await MediaLibrary.requestPermissionsAsync();
+              if (status === 'granted') {
+                await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                console.log("Batch delete successful!");
+              }
+            } catch (deleteError) {
+              console.warn('Batch delete failed:', deleteError);
+            }
+          }
+
+          // Step 3: Update UI once at the end
+          if (deletedIds.length > 0) {
+            setMedia(prev => prev.filter(item => !deletedIds.includes(item.id.toString())));
+            console.log(`Removed ${deletedIds.length} items from UI`);
+          }
+
+          // Exit selection mode
+          exitSelectionMode();
+        } catch (error) {
+          console.error('Error deleting selected items:', error);
+          showAlert('Error', 'Failed to move items to trash');
+        }
+      },
+      null,
+      true // Destructive
+    );
+  }, [selectedItems, filteredMedia, exitSelectionMode, showConfirm, showAlert]);
+
+  const handleAddToVaultConfirm = useCallback(async () => {
+    const selectedCount = selectedItems.size;
+    if (selectedCount === 0) return;
+
+    try {
+      const selectedIds = Array.from(selectedItems);
+      const selectedMedia = filteredMedia.filter(item => selectedIds.includes(item.id.toString()));
+      const addedVaultItems = [];
+
+      // 1. Copy to Vault & Track for Rollback
+      for (const item of selectedMedia) {
+        try {
+          const vaultMetadata = await moveMediaToVault(item, false); // Don't delete yet
+          if (vaultMetadata) {
+            addedVaultItems.push(vaultMetadata);
+          }
+        } catch (copyError) {
+          console.error('Failed to copy item to vault:', item.id, copyError);
+        }
+      }
+
+      if (addedVaultItems.length === 0) {
+        showAlert('Error', 'Failed to copy items to vault.');
+        return;
+      }
+
+      // 2. Delete from System (Batch)
+      const validAssetsToDelete = selectedMedia.filter(
+        m => m.id && !m.id.toString().startsWith('vault_') && !m.id.toString().startsWith('picked_')
+      );
+
+      let deleteSuccess = false;
+      if (validAssetsToDelete.length > 0) {
+        const ids = validAssetsToDelete.map(m => m.id);
+        try {
+          deleteSuccess = await MediaLibrary.deleteAssetsAsync(ids);
+        } catch (e) {
+          console.error('Delete failed:', e);
+          deleteSuccess = false;
+        }
+      } else {
+        deleteSuccess = true;
+      }
+
+      // 3. Rollback if Delete Failed
+      if (!deleteSuccess && validAssetsToDelete.length > 0) {
+        console.log('System delete denied or failed. Rolling back vault copies...');
+        for (const vaultItem of addedVaultItems) {
+          await removeMediaFromVault(vaultItem.id);
+        }
+        showAlert('Move Cancelled', 'Original items could not be deleted, so the move was cancelled.');
+        return;
+      }
+
+      // 4. Success - Clean up and Return
+      setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+      exitSelectionMode();
+
+    } catch (error) {
+      console.error('Error adding to vault:', error);
+      showAlert('Error', 'An unexpected error occurred.');
+    }
+  }, [selectedItems, filteredMedia, exitSelectionMode]);
+
+  const handleAddToFolderConfirm = useCallback(async () => {
+    const selectedCount = selectedItems.size;
+    if (selectedCount === 0) return;
+
+    try {
+      const selectedIds = Array.from(selectedItems);
+      // Filter out vault items as they cannot be added to system folders
+      const validAssets = filteredMedia
+        .filter(item => selectedIds.includes(item.id.toString()))
+        .filter(m => !m.id.toString().startsWith('vault_'))
+        .map(m => m.id);
+
+      if (validAssets.length === 0) {
+        showAlert('Error', 'No valid photos selected. Vault items cannot be added to folders.');
+        return;
+      }
+
+      if (validAssets.length < selectedCount) {
+        showAlert('Warning', 'Some items (e.g. Vault items) were skipped.');
+      }
+
+      await addMediaToFolder(targetFolderId, validAssets);
+      exitSelectionMode();
+    } catch (e) {
+      console.error('Error adding to folder:', e);
+      showAlert('Error', 'Failed to add photos to folder');
+    }
+  }, [selectedItems, filteredMedia, targetFolderId, exitSelectionMode]);
+
+  const renderItem = useCallback(({ item, index }) => {
+    const itemId = item.id.toString();
+    const isSelected = selectedItems.has(itemId);
+
+    return (
+      <MediaItem
+        item={item}
+        index={index}
+        isSelected={isSelected}
+        onPress={() => handleItemPress(item, index)}
+        onLongPress={() => handleLongPress(item)}
+        colors={colors}
+      />
+    );
+  }, [selectedItems, handleItemPress, handleLongPress, colors]);
+
+  const keyExtractor = useCallback((item, index) => {
+    // Include URI in key to force re-render when image changes
+    return `${item?.id?.toString() || `media-${index}`}_${item?.uri || ''}`;
+  }, []);
+
+  const loadGallery = async (showLoader = true, reset = false) => {
+    try {
+      if (showLoader) setLoading(true);
+      if (!reset && loadingMore) return; // Prevent concurrent loads
+
+      // RESET pagination & cache if requested (CRITICAL for refresh)
+      if (reset) {
+        console.log("HomeScreen: RESETTING gallery state...");
+        setMedia([]);
+        setPageInfo({ hasNextPage: true, endCursor: undefined });
+      }
+
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Permission not granted');
+        if (showLoader) setLoading(false);
+        return;
+      }
+
+      if (!reset) setLoadingMore(true);
+
+      console.log("HomeScreen: Loading batch of media (all types)...");
+
+      const fetchCount = 100; // Efficient batch size for combined fetch
+      const currentCursor = reset ? undefined : pageInfo.endCursor;
+
+      if (!reset && !pageInfo.hasNextPage) {
+        setLoadingMore(false);
+        return;
+      }
+
+      // UNIFIED FETCH: Fetch photos and videos together for stable sorting
+      // Use modificationTime for fetch to ensure recently created/edited assets (like crops)
+      // are included in the first batch even if creationTime is 0/un-indexed.
+      const result = await MediaLibrary.getAssetsAsync({
+        mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+        first: fetchCount,
+        after: currentCursor,
+        sortBy: [[MediaLibrary.SortBy.modificationTime, false]], // Native sort (descending)
+      });
+
+      setPageInfo({ hasNextPage: result.hasNextPage, endCursor: result.endCursor });
+
+      if (result.assets.length === 0 && !reset) {
+        setLoadingMore(false);
+        return;
+      }
+
+      console.log("HomeScreen: Loaded batch of", result.assets.length, "items");
+      if (result.assets.length > 0) {
+        console.log("HomeScreen: Top item metadata:", {
+          id: result.assets[0].id,
+          creationTime: result.assets[0].creationTime,
+          modificationTime: result.assets[0].modificationTime
+        });
+      }
+
+      // Normalize media types and add fallback sort markers
+      const normalizedAssets = result.assets.map(asset => ({
+        ...asset,
+        mediaType: asset.mediaType === MediaLibrary.MediaType.video ? 'video' : 'photo',
+      }));
+
+      // ⚡ PERFORMANCE: Filter vault items before merging to save operations
+      const filteredNewMedia = await filterVaultMedia(normalizedAssets);
+
+      setMedia(prev => {
+        const merged = reset ? filteredNewMedia : [...prev, ...filteredNewMedia];
+
+        // 🔒 STABLE GLOBAL SORT: Enforce strict chronological order (newest first)
+        // Deduplicate and Sort
+        const uniqueItemsMap = new Map();
+        merged.forEach(item => {
+          uniqueItemsMap.set(item.id.toString(), item);
+        });
+        const uniqueItems = Array.from(uniqueItemsMap.values());
+
+        return uniqueItems.sort((a, b) => {
+          // Prefer creationTime, then modificationTime, then 0
+          // This ensures that newly cropped photos (with 0 creationTime)
+          // bubble to the top if their modificationTime is current.
+          const timeA = a.creationTime || a.modificationTime || 0;
+          const timeB = b.creationTime || b.modificationTime || 0;
+
+          if (timeB !== timeA) return timeB - timeA;
+
+          // Secondary fallback for safety
+          return (b.id?.toString() || '').localeCompare(a.id?.toString() || '');
+        });
+      });
+
+    } catch (error) {
+      console.error('Error loading gallery:', error);
+    } finally {
+      if (showLoader) setLoading(false);
+      setLoadingMore(false);
+    }
+  };
+
+  const handleLoadMore = () => {
+    if (loadingMore || loading) return;
+    if (pageInfo.hasNextPage) {
+      console.log("HomeScreen: Triggering loadMore (unified)...");
+      loadGallery(false, false);
+    }
+  };
+
+  const handleRefresh = useCallback(async () => {
+    console.log("HomeScreen: Pull-to-refresh triggered");
+    setRefreshing(true);
+    await loadGallery(false, true); // reset = true
+    setRefreshing(false);
+  }, []);
+
+  useEffect(() => {
+    // Skip loading gallery if entering for vault add (assume media already loaded or handled)
+    if (route?.params?.selectionPurpose === 'vaultAdd') {
+      return;
+    }
+    // Load gallery on mount - show loader only on first load
+    loadGallery(true);
+  }, []);
+
+  // MediaLibrary listener disabled - causes slow reloads after deletion
+  // The UI already updates instantly by filtering deleted items from state
+  /*
+  useEffect(() => {
+    console.log("HomeScreen: Setting up MediaLibrary listener...");
+
+    const subscription = MediaLibrary.addListener(() => {
+      console.log("HomeScreen: MediaLibrary changed! Auto-refreshing...");
+      // Refresh gallery when new photos are added
+      loadGallery(false, true); // reset = true to get latest photos
+    });
+
+    return () => {
+      console.log("HomeScreen: Removing MediaLibrary listener");
+      subscription.remove();
+    };
+  }, []);
+  */
+
+  // Don't reload on vault unlock - media is already loaded
+  // useEffect(() => {
+  //   if (!isVaultUnlocked) {
+  //     loadGallery();
+  //   }
+  // }, [isVaultUnlocked]);
+
+  useEffect(() => {
+    // Hidden Vault Access Logic
+    const timeoutId = setTimeout(async () => {
+      const trimmedQuery = query.trim();
+      if (!trimmedQuery) return;
+
+      // 1. Setup Trigger (if not setup)
+      if (!isVaultSetup && trimmedQuery.toLowerCase() === 'setup vault') {
+        setQuery('');
+        navigation.navigate('VaultSetup');
+        return;
+      }
+
+      // 2. Unlock Trigger (if setup and locked)
+      if (isVaultSetup && !isVaultUnlocked) {
+        try {
+          const isValid = await verifyPassword(trimmedQuery);
+          if (isValid) {
+            unlockVault();
+            setQuery(''); // Clear password from search
+            navigation.navigate('VaultHome');
+          }
+        } catch (error) {
+          // Ignore errors during passive check
+        }
+      }
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [query, isVaultSetup, isVaultUnlocked, verifyPassword, unlockVault, navigation]);
+
+  const handleMenuPress = () => {
+    console.log('Menu button pressed');
+    setMenuAnchorPosition({
+      x: 16,
+      y: 60,
+    });
+    setMenuVisible(true);
+  };
+
+  const handleMenuSelect = (optionId) => {
+    setMenuVisible(false);
+
+    switch (optionId) {
+      case 'settings':
+        setTimeout(() => {
+          setSettingsPanelVisible(true);
+        }, 100);
+        break;
+      case 'trash':
+        navigation.navigate('Trash');
+        break;
+      default:
+        break;
+    }
+  };
+
+
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
+        <View style={styles.loader}>
+          <ActivityIndicator size="large" color={colors.icon} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <View style={[styles.safe, { backgroundColor: colors.background }]}>
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.container}>
+          {isSelectionMode ? (
+            <View style={[styles.selectionHeader, { backgroundColor: colors.itemBackground }]}>
+              <TouchableOpacity
+                onPress={exitSelectionMode}
+                style={styles.cancelButton}
+              >
+                <Text style={[styles.cancelText, { color: colors.text }]}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={[styles.selectionCount, { color: colors.text }]}>
+                {selectedItems.size} {selectedItems.size === 1 ? 'item' : 'items'} selected
+              </Text>
+              <View style={styles.selectionActions}>
+                {(selectionPurpose === 'vaultAdd' || selectionPurpose === 'folderAdd') ? (
+                  <TouchableOpacity
+                    onPress={selectionPurpose === 'vaultAdd' ? handleAddToVaultConfirm : handleAddToFolderConfirm}
+                    style={styles.selectionActionButton}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="checkmark-circle" size={32} color="#007AFF" />
+                  </TouchableOpacity>
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      onPress={handleShareSelected}
+                      style={styles.selectionActionButton}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="share-outline" size={24} color={colors.icon} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleDeleteSelected}
+                      style={styles.selectionActionButton}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="trash-outline" size={24} color="#ff3b30" />
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            </View>
+          ) : (
+            <View style={styles.header}>
+              <View style={[styles.searchBar, { backgroundColor: colors.searchBar }]}>
+                <Ionicons name="search" size={16} color={colors.searchPlaceholder} />
+                <TextInput
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder="name, people, places"
+                  placeholderTextColor={colors.searchPlaceholder}
+                  style={[styles.searchInput, { color: colors.searchText }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+              <TouchableOpacity
+                ref={menuButtonRef}
+                onPress={handleMenuPress}
+                style={styles.menuButton}
+              >
+                <Ionicons name="ellipsis-vertical" size={22} color={colors.icon} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <FlatList
+            data={filteredMedia}
+            keyExtractor={keyExtractor}
+            numColumns={NUM_COLUMNS}
+            renderItem={renderItem}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={[
+              styles.grid,
+              filteredMedia.length === 0 && { flex: 1 }
+            ]}
+            extraData={{ isSelectionMode, selectedItems }}
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            windowSize={5}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={10}
+            updateCellsBatchingPeriod={50}
+            initialNumToRender={15}
+            ListEmptyComponent={
+              !loading && (
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 18, color: colors.text, opacity: 0.6 }}>No photos found</Text>
+                </View>
+              )
+            }
+            ListFooterComponent={
+              loadingMore ? (
+                <View style={{ paddingVertical: 20 }}>
+                  <ActivityIndicator size="small" color={colors.icon} />
+                </View>
+              ) : null
+            }
+          />
+        </View>
+
+        <DropdownMenu
+          visible={menuVisible}
+          onClose={() => setMenuVisible(false)}
+          onSelect={handleMenuSelect}
+          anchorPosition={menuAnchorPosition}
+        />
+
+        <SideSettingsPanel
+          visible={settingsPanelVisible}
+          onClose={() => setSettingsPanelVisible(false)}
+        />
+      </SafeAreaView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+  },
+  safeArea: {
+    flex: 1,
+  },
+  container: {
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    paddingHorizontal: 12,
+    height: 36,
+    borderRadius: 18,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    paddingVertical: 0,
+    height: '100%',
+  },
+  menuButton: {
+    padding: 4,
+    marginLeft: 4,
+  },
+  grid: {
+    padding: GAP,
+  },
+  item: {
+    width: ITEM_SIZE,
+    height: ITEM_SIZE,
+    margin: GAP / 2,
+    overflow: 'hidden',
+  },
+  image: {
+    width: '100%',
+    height: '100%',
+  },
+  videoBadge: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 4,
+  },
+  itemSelected: {
+    opacity: 1,
+  },
+  selectionOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 122, 255, 0.3)',
+  },
+  checkBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    backgroundColor: '#007AFF',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    zIndex: 10,
+  },
+  selectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  cancelButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  cancelText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  selectionCount: {
+    fontSize: 16,
+    fontWeight: '600',
+    flex: 1,
+    textAlign: 'center',
+  },
+  selectionActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  selectionActionButton: {
+    padding: 4,
+  },
+  placeholder: {
+    width: 60,
+  },
+  loader: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
