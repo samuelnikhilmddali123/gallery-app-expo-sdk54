@@ -111,16 +111,28 @@ const CustomVideoControls = ({
 
 // --- Video Content Component ---
 const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
-  const [videoUri, setVideoUri] = useState(videoStates?.current?.[mediaItem.id]?.uri || null);
-  const [isLoading, setIsLoading] = useState(() => !videoStates?.current?.[mediaItem.id]?.uri);
+  const [videoUri, setVideoUri] = useState(null);
+  const [isReady, setIsReady] = useState(false); // NEW: Gate rendering
+  const [loadError, setLoadError] = useState(false); // NEW: Track errors
   const [isPlaying, setIsPlaying] = useState(false);
+
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
   const isRestoringRef = useRef(false);
   const hasRestoredRef = useRef(false);
-  const videoRef = useRef(null); // Step 1.2: Add ref to video
+  const videoRef = useRef(null);
 
-  // Step 1.4: CLEANUP video on screen exit
+  // Clean up on unmount or ID change
+  useEffect(() => {
+    return () => {
+      setIsReady(false);
+      setLoadError(false);
+      setVideoUri(null);
+      loadedIdRef.current = null;
+    };
+  }, [mediaItem.id]); // Reset when ID changes
+
+  // Cleanup video on screen exit
   useFocusEffect(
     useCallback(() => {
       return () => {
@@ -129,14 +141,13 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
             player.pause();
           }
         } catch (e) {
-          // Ignore errors when calling methods on released shared objects
           console.warn('ViewerScreen: Failed to pause player on cleanup', e);
         }
         if (videoRef.current) {
           videoRef.current = null;
         }
       };
-    }, [player])
+    }, [player]) // Correct dependency on player
   );
 
   // Custom Control State
@@ -152,16 +163,23 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     // If we already have the URI cached for this ID, just use it
     if (loadedIdRef.current === mediaItem.id) return;
 
+    // Reset state for new item
+    setIsReady(false);
+    setLoadError(false);
+    setVideoUri(null);
+    setCurrentTime(0);
+    setDuration(0);
+    hasRestoredRef.current = false;
+
     const cachedUri = videoStates?.current?.[mediaItem.id]?.uri;
     if (cachedUri) {
       setVideoUri(cachedUri);
       loadedIdRef.current = mediaItem.id;
-      setIsLoading(false);
+      setIsReady(true);
       return;
     }
 
     let isMounted = true;
-    setIsLoading(true);
 
     const loadUri = async () => {
       try {
@@ -182,39 +200,45 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         } else {
           uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
         }
-        if (isMounted && uri) {
-          setVideoUri(uri);
-          loadedIdRef.current = mediaItem.id;
-          // Cache the URI for faster remounts (rotation)
-          if (videoStates?.current) {
-            videoStates.current[mediaItem.id] = {
-              ...videoStates.current[mediaItem.id],
-              uri: uri
-            };
+
+        if (isMounted) {
+          if (uri) {
+            setVideoUri(uri);
+            loadedIdRef.current = mediaItem.id;
+            // Cache the URI for faster remounts (rotation)
+            if (videoStates?.current) {
+              videoStates.current[mediaItem.id] = {
+                ...videoStates.current[mediaItem.id],
+                uri: uri
+              };
+            }
+            setIsReady(true); // Only set ready when we strictly have a URI
+          } else {
+            console.error("VideoContent: Could not resolve URI for", mediaItem.id);
+            setLoadError(true);
           }
         }
       } catch (e) {
         console.error("Error determining video URI", e);
-      } finally {
-        if (isMounted) setIsLoading(false);
+        if (isMounted) setLoadError(true);
       }
     };
     loadUri();
     return () => { isMounted = false; };
   }, [mediaItem.id, videoStates]);
 
-  // Player Hook
+  // Player Hook - Only init when valid URI exists
   const player = useVideoPlayer(videoUri, (player) => {
     if (videoUri) {
       player.loop = false;
       player.muted = false;
-      player.timeUpdateEventInterval = 0.1; // Update every 100ms
+      player.timeUpdateEventInterval = 0.1;
     }
   });
 
   // Event Listeners for Custom Controls & Restoration
   useEffect(() => {
-    if (!player) return;
+    if (!player || !isReady) return;
 
     const restoreState = () => {
       if (hasRestoredRef.current || !videoStates?.current?.[mediaItem.id]) return;
@@ -307,7 +331,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
       playSub.remove();
       timeSub.remove();
     };
-  }, [player, mediaItem.id, videoStates, isActive]);
+  }, [player, mediaItem.id, videoStates, isActive, isReady]);
 
   // Pause when inactive
   useEffect(() => {
@@ -377,9 +401,21 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     opacity: controlsOpacity.value,
   }));
 
-  if (isLoading) {
+  // Render Logic
+  // 1. Error state
+  if (loadError) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center' }}>
+        <Ionicons name="alert-circle-outline" size={48} color="white" />
+        <Text style={{ color: 'white', marginTop: 10 }}>Failed to load video</Text>
+      </View>
+    );
+  }
+
+  // 2. Loading state (strictly gated)
+  if (!isReady || !videoUri) {
+    return (
+      <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color="#fff" />
       </View>
     );
@@ -389,9 +425,9 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
       {/* Background Video Layer */}
       <View style={videoBoxStyle} pointerEvents="box-none">
-        {player && videoUri && (
+        {player && (
           <VideoView
-            ref={videoRef} // Step 1.3: Attach ref to Video
+            ref={videoRef}
             player={player}
             style={StyleSheet.absoluteFill}
             nativeControls={false}
@@ -409,19 +445,17 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         onPress={onToggleUI}
       />
 
+      {/* Play Button Overlay - ALWAYS VISIBLE when paused - Moved OUTSIDE Animated.View */}
+      {!isPlaying && (
+        <View style={[StyleSheet.absoluteFill, { zIndex: 100, elevation: 100, justifyContent: 'center', alignItems: 'center' }]} pointerEvents="box-none">
+          <TouchableOpacity onPress={togglePlay} style={controlStyles.largePlayButton}>
+            <Ionicons name="play" size={40} color="white" style={{ marginLeft: 4 }} />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* UI Controls Layer - top layer, receives touches for buttons, passes through elsewhere */}
       <Animated.View style={[StyleSheet.absoluteFill, videoControlsStyle]} pointerEvents="box-none">
-        {/* Play Button Overlay - centered exactly on video area */}
-        {!isPlaying && (
-          <View style={[videoBoxStyle, { position: 'absolute' }]} pointerEvents="box-none">
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }} pointerEvents="box-none">
-              <TouchableOpacity onPress={togglePlay} style={controlStyles.largePlayButton}>
-                <Ionicons name="play" size={40} color="white" style={{ marginLeft: 4 }} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
         {/* Video Bottom Controls */}
         <CustomVideoControls
           isPlaying={isPlaying}
@@ -441,23 +475,20 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 // --- Image Content Component ---
 const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKey, dimensions }) => {
   const [imageUri, setImageUri] = useState(null);
+  const [isReady, setIsReady] = useState(false); // NEW: Gate rendering
   const loadedIdRef = useRef(null); // Track which image ID we've loaded
-  // Initialize with screen dimensions
   const screenDims = Dimensions.get('window');
   const [layout, setLayout] = useState({ width: screenDims.width, height: screenDims.height });
 
-  // DEBUG LOG
-  console.log(`ImageContent render: ID=${mediaItem.id} URI=${imageUri} Dims=${dimensions.width}x${dimensions.height}`);
-
   useEffect(() => {
-    // Skip if we've already loaded this image ID (unless refreshKey changed)
-    const currentKey = `${mediaItem.id}_${refreshKey || ''}`;
-    if (loadedIdRef.current === currentKey) {
-      console.log('ImageContent: Skipping URI reload for key', currentKey, '(already loaded)');
-      return;
-    }
+    // Reset when ID changes
+    setIsReady(false);
+    setImageUri(null);
+    loadedIdRef.current = null;
 
+    const currentKey = `${mediaItem.id}_${refreshKey || ''}`;
     let isMounted = true;
+
     const load = async () => {
       // Resolve best image URI (similar to original logic)
       let uri = mediaItem.uri || mediaItem.filePath || mediaItem.localUri;
@@ -467,19 +498,18 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
           uri = asset.localUri || asset.uri || uri;
         } catch (e) { console.error('Asset info error:', e); }
       }
+
       console.log('ImageContent resolved URI:', uri);
-      if (isMounted) {
+      if (isMounted && uri) {
         setImageUri(uri);
         loadedIdRef.current = currentKey; // Mark as loaded
+        setIsReady(true);
       }
     };
     load();
     return () => { isMounted = false; };
-  }, [mediaItem.id, refreshKey]); // ✅ Only depend on ID and refreshKey, not entire object
+  }, [mediaItem.id, refreshKey]); // Depend only on items execution
 
-  // Removed rotation transform - using native screen rotation
-
-  // Use refreshKey + id as key (don't include URI to avoid remount on rotation)
   const imageKey = `${mediaItem.id}_${refreshKey || ''}`;
 
   return (
@@ -490,7 +520,7 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
         setLayout({ width, height });
       }}
     >
-      {imageUri ? (
+      {isReady && imageUri ? (
         <ZoomableImage
           key={imageKey}
           source={{ uri: imageUri }}
@@ -789,7 +819,25 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   return (
     <GestureDetector gesture={verticalSwipeGesture}>
       <View style={styles.container}>
-        {/* Top Bar with Controls */}
+        <FlatList
+          ref={flatListRef}
+          data={mediaItems}
+          renderItem={renderItem}
+          keyExtractor={item => item.id?.toString() || Math.random().toString()}
+          horizontal
+          pagingEnabled
+          scrollEnabled={!isZoomed && (!isLandscape || isPhoto)}
+          showsHorizontalScrollIndicator={false}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
+          getItemLayout={getItemLayout}
+          initialScrollIndex={initialIndex || 0}
+          windowSize={3}
+          maxToRenderPerBatch={2}
+          initialNumToRender={1}
+        />
+
+        {/* Top Bar with Controls - Rendered AFTER FlatList to be on top */}
         <Animated.View style={[styles.safeArea, topBarStyle]} pointerEvents={controlsVisible ? 'auto' : 'none'}>
           <SafeAreaView edges={['top']}>
             <View style={styles.topBar}>
@@ -814,24 +862,6 @@ export default function ViewerScreen({ route, navigation: navProp }) {
           </SafeAreaView>
         </Animated.View>
 
-        <FlatList
-          ref={flatListRef}
-          data={mediaItems}
-          renderItem={renderItem}
-          keyExtractor={item => item.id?.toString() || Math.random().toString()}
-          horizontal
-          pagingEnabled
-          scrollEnabled={!isZoomed && (!isLandscape || isPhoto)}
-          showsHorizontalScrollIndicator={false}
-          onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
-          getItemLayout={getItemLayout}
-          initialScrollIndex={initialIndex || 0}
-          windowSize={3}
-          maxToRenderPerBatch={2}
-          initialNumToRender={1}
-        />
-
       </View>
     </GestureDetector>
   );
@@ -839,7 +869,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
 
 const getStyles = (width, height) => StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
-  safeArea: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100 },
+  safeArea: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100, elevation: 10 },
   topBar: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingTop: 8, zIndex: 101 },
   actionButtons: { flexDirection: 'row', gap: 8 },
   actionButton: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
