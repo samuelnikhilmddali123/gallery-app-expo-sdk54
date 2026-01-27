@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, ActivityIndicator, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, ActivityIndicator, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder } from 'react-native';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video'; // NEW: Import from expo-video
 import { TouchableOpacity as GHTouchableOpacity, Gesture, GestureDetector } from 'react-native-gesture-handler'; // Better touch handling with gestures
@@ -34,35 +34,52 @@ const isVideoItem = (mediaItem) => {
 // Separated to allow cleaner use of hooks
 // --- Custom Video Controls ---
 // --- ProgressBar Component ---
-const ProgressBar = ({ progress, onSeek, duration }) => {
-  const [width, setWidth] = useState(0);
+const ProgressBar = ({ progress, onSeek, duration, onIsInteracting }) => {
+  const layoutWidth = useRef(0);
 
-  const handlePress = (e) => {
-    if (width > 0 && duration > 0) {
-      const x = e.nativeEvent.locationX;
-      const percent = x / width;
-      const time = percent * duration;
-      onSeek(time);
+  const handleTouch = (evt) => {
+    if (layoutWidth.current > 0 && duration > 0) {
+      const { locationX } = evt.nativeEvent;
+      const percent = Math.max(0, Math.min(1, locationX / layoutWidth.current));
+      onSeek(percent * duration);
     }
   };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponderCapture: () => true,
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        onIsInteracting?.(true);
+        handleTouch(evt);
+      },
+      onPanResponderMove: (evt) => {
+        handleTouch(evt);
+      },
+      onPanResponderRelease: () => {
+        onIsInteracting?.(false);
+      },
+      onPanResponderTerminate: () => {
+        onIsInteracting?.(false);
+      },
+      onPanResponderTerminationRequest: () => false,
+    })
+  ).current;
 
   return (
     <View
       style={controlStyles.progressBarContainer}
-      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+      onLayout={(e) => {
+        layoutWidth.current = e.nativeEvent.layout.width;
+      }}
+      {...panResponder.panHandlers}
     >
-      <TouchableOpacity
-        activeOpacity={1}
-        style={StyleSheet.absoluteFill}
-        onPress={handlePress}
-        hitSlop={{ top: 15, bottom: 15 }}
-      >
-        <View style={{ height: '100%', justifyContent: 'center' }}>
-          <View style={{ height: 4, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2, overflow: 'hidden' }}>
-            <View style={[controlStyles.progressBarFill, { width: `${Math.min(100, Math.max(0, progress))}%` }]} />
-          </View>
+      <View style={{ height: '100%', justifyContent: 'center', width: '100%' }} pointerEvents="none">
+        <View style={{ height: 4, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2, overflow: 'hidden' }}>
+          <View style={[controlStyles.progressBarFill, { width: `${Math.min(100, Math.max(0, progress))}%` }]} />
         </View>
-      </TouchableOpacity>
+      </View>
     </View>
   );
 };
@@ -75,7 +92,8 @@ const CustomVideoControls = ({
   onToggleFullscreen,
   visible,
   onSeek,
-  isLandscape
+  isLandscape,
+  onIsInteracting
 }) => {
   const formatTime = (timeInSeconds) => {
     if (!timeInSeconds && timeInSeconds !== 0) return '0:00';
@@ -90,7 +108,15 @@ const CustomVideoControls = ({
 
   return (
     <View style={controlStyles.controlsContainer} pointerEvents="box-none">
-      <View style={controlStyles.bottomBar} pointerEvents="box-none">
+      {/* Bottom bar container - consumes taps to prevent toggling controls when tapping near buttons */}
+      <TouchableOpacity
+        activeOpacity={1}
+        style={controlStyles.bottomBar}
+        onPress={(e) => {
+          // Consume event
+        }}
+        pointerEvents="auto"
+      >
         <TouchableOpacity onPress={onPlayPause} style={controlStyles.smallControlBtn}>
           <Ionicons name={isPlaying ? "pause" : "play"} size={24} color="white" />
         </TouchableOpacity>
@@ -99,12 +125,17 @@ const CustomVideoControls = ({
           {formatTime(currentTime)} / {formatTime(duration || 0)}
         </Text>
 
-        <ProgressBar progress={progress} onSeek={onSeek} duration={duration || 0} />
+        <ProgressBar
+          progress={progress}
+          onSeek={onSeek}
+          duration={duration || 0}
+          onIsInteracting={onIsInteracting}
+        />
 
         <TouchableOpacity onPress={onToggleFullscreen} style={controlStyles.smallControlBtn}>
           <Ionicons name={isLandscape ? "contract-outline" : "scan-outline"} size={24} color="white" />
         </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
     </View>
   );
 };
@@ -115,6 +146,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const [isReady, setIsReady] = useState(false); // NEW: Gate rendering
   const [loadError, setLoadError] = useState(false); // NEW: Track errors
   const [isPlaying, setIsPlaying] = useState(false);
+  const [hasInteracted, setHasInteracted] = useState(false); // Track if user has interacted with video
+  const [isInteracting, setIsInteracting] = useState(false); // Track if user is seeking/dragging
 
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
@@ -128,6 +161,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
       setIsReady(false);
       setLoadError(false);
       setVideoUri(null);
+      setHasInteracted(false); // Reset interaction state for new video
       loadedIdRef.current = null;
     };
   }, [mediaItem.id]); // Reset when ID changes
@@ -137,17 +171,20 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     useCallback(() => {
       return () => {
         try {
-          if (player) {
+          if (player && player.status === 'readyToPlay') {
+            // Check if player is still valid (not released)
+            // Expo Modules shared objects throw when used after release
             player.pause();
           }
         } catch (e) {
-          console.warn('ViewerScreen: Failed to pause player on cleanup', e);
+          // If player is already released, this will catch the native error
+          console.log('ViewerScreen: Player already released or failed to pause', e.message);
         }
         if (videoRef.current) {
           videoRef.current = null;
         }
       };
-    }, [player]) // Correct dependency on player
+    }, [player])
   );
 
   // Custom Control State
@@ -184,20 +221,38 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     const loadUri = async () => {
       try {
         let uri = null;
-        if (mediaItem.id && mediaItem.id.toString().startsWith('vault_') && mediaItem.filePath) {
-          uri = mediaItem.filePath;
-        } else if (mediaItem.id && !mediaItem.id.toString().startsWith('picked_') && !mediaItem.id.toString().startsWith('temp_')) {
+        const isVault = mediaItem.id && mediaItem.id.toString().startsWith('vault_');
+        const isTrash = mediaItem.isTrash || mediaItem.isAppTrash;
+
+        // 1. Prioritize direct paths for Vault and Trash items
+        if ((isVault || isTrash) && (mediaItem.filePath || mediaItem.uri || mediaItem.localUri)) {
+          uri = mediaItem.filePath || mediaItem.uri || mediaItem.localUri;
+        }
+        // 2. Otherwise try MediaLibrary for regular assets
+        else if (mediaItem.id && !mediaItem.id.toString().startsWith('picked_') && !mediaItem.id.toString().startsWith('temp_')) {
           const { status } = await MediaLibrary.requestPermissionsAsync();
           if (status === 'granted') {
-            const asset = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
-            uri = asset.localUri || asset.uri;
-            if (asset.width && asset.height) {
-              setVideoDims({ width: asset.width, height: asset.height });
+            try {
+              const asset = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
+              if (asset) {
+                uri = asset.localUri || asset.uri;
+                if (asset.width && asset.height) {
+                  setVideoDims({ width: asset.width, height: asset.height });
+                }
+              } else {
+                // Asset not found in media library (might be in system trash or recently moved)
+                uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
+              }
+            } catch (err) {
+              console.warn("VideoContent: getAssetInfoAsync failed", err);
+              uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
             }
           } else {
             uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
           }
-        } else {
+        }
+        // 3. Last resort fallback
+        else {
           uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
         }
 
@@ -230,7 +285,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   // Player Hook - Only init when valid URI exists
   const player = useVideoPlayer(videoUri, (player) => {
     if (videoUri) {
-      player.loop = false;
+      player.loop = true;
       player.muted = false;
       player.timeUpdateEventInterval = 0.1;
     }
@@ -260,7 +315,13 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         // If it was playing, resume after a short delay to allow seek to settle
         if (state.isPlaying && isActive) {
           setTimeout(() => {
-            if (isActive) player.play();
+            try {
+              if (isActive && player && player.status === 'readyToPlay') {
+                player.play();
+              }
+            } catch (e) {
+              console.warn('ViewerScreen: Failed to resume playback in timeout', e);
+            }
           }, 500);
         }
       } else {
@@ -274,6 +335,12 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
       if (duration === 0) setDuration(player.duration);
       restoreState();
     }
+
+    const playbackSub = player.addListener('playbackStateChange', (e) => {
+      if (e.playbackState === 'finished') {
+        setIsPlaying(false);
+      }
+    });
 
     const statusSub = player.addListener('statusChange', (s) => {
       if (s.status === 'readyToPlay') {
@@ -327,6 +394,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     });
 
     return () => {
+      playbackSub.remove();
       statusSub.remove();
       playSub.remove();
       timeSub.remove();
@@ -335,20 +403,66 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
   // Pause when inactive
   useEffect(() => {
-    if (!isActive && player && isPlaying) player.pause();
+    try {
+      if (!isActive && player && player.status === 'readyToPlay' && isPlaying) {
+        player.pause();
+      }
+    } catch (e) {
+      console.warn('ViewerScreen: Error pausing background video', e);
+    }
   }, [isActive, player, isPlaying]);
 
   const togglePlay = () => {
+    if (!player || player.status !== 'readyToPlay') return;
+
+    try {
+      // Check if video is finished using player's native state
+      const isFinished = player.playbackState === 'finished';
+
+      if (isFinished) {
+        // Precise restart: seek to 0 and play in one go
+        player.currentTime = 0;
+        setCurrentTime(0);
+        player.play();
+        setHasInteracted(true);
+      } else {
+        // Normal toggle
+        if (isPlaying) {
+          player.pause();
+        } else {
+          setHasInteracted(true);
+          player.play();
+        }
+      }
+    } catch (e) {
+      console.error('ViewerScreen: Error toggling play', e);
+    }
+  };
+
+  const handleRewind10 = () => {
     if (player) {
-      if (isPlaying) player.pause();
-      else player.play();
+      const newTime = Math.max(0, currentTime - 10);
+      player.currentTime = newTime;
+      setCurrentTime(newTime);
+    }
+  };
+
+  const handleForward10 = () => {
+    if (player && duration) {
+      const newTime = Math.min(duration, currentTime + 10);
+      player.currentTime = newTime;
+      setCurrentTime(newTime);
     }
   };
 
   const handleSeek = (time) => {
-    if (player) {
-      player.currentTime = time;
-      setCurrentTime(time); // Optimistic update
+    if (player && player.status === 'readyToPlay') {
+      try {
+        player.currentTime = time;
+        setCurrentTime(time); // Optimistic update
+      } catch (e) {
+        console.warn('ViewerScreen: Seek failed', e);
+      }
     }
   };
 
@@ -439,35 +553,74 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
       </View>
 
       {/* Transparent overlay for toggling controls - middle layer, captures taps on empty areas */}
-      <TouchableOpacity
-        style={StyleSheet.absoluteFill}
-        activeOpacity={1}
-        onPress={onToggleUI}
-      />
+      {/* Only active after user has interacted, otherwise initial play button handles touches */}
+      {hasInteracted && (
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={() => {
+            if (!isInteracting) {
+              onToggleUI();
+            }
+          }}
+        />
+      )}
 
-      {/* Play Button Overlay - ALWAYS VISIBLE when paused - Moved OUTSIDE Animated.View */}
-      {!isPlaying && (
-        <View style={[StyleSheet.absoluteFill, { zIndex: 100, elevation: 100, justifyContent: 'center', alignItems: 'center' }]} pointerEvents="box-none">
-          <TouchableOpacity onPress={togglePlay} style={controlStyles.largePlayButton}>
-            <Ionicons name="play" size={40} color="white" style={{ marginLeft: 4 }} />
-          </TouchableOpacity>
+      {/* Initial Play Button Overlay - Shows before user interaction - rendered on top */}
+      {!hasInteracted && !isPlaying && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <View style={controlStyles.initialPlayOverlay}>
+            <TouchableOpacity onPress={togglePlay} style={controlStyles.initialPlayButton}>
+              <Ionicons name="play" size={60} color="white" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
-      {/* UI Controls Layer - top layer, receives touches for buttons, passes through elsewhere */}
-      <Animated.View style={[StyleSheet.absoluteFill, videoControlsStyle]} pointerEvents="box-none">
-        {/* Video Bottom Controls */}
-        <CustomVideoControls
-          isPlaying={isPlaying}
-          onPlayPause={togglePlay}
-          duration={duration}
-          currentTime={currentTime}
-          onToggleFullscreen={toggleFullscreen}
-          visible={true}
-          onSeek={handleSeek}
-          isLandscape={dimensions.width > dimensions.height}
-        />
-      </Animated.View>
+      {/* Center Overlay Controls - YouTube style (only show after interaction) */}
+      {hasInteracted && (
+        <Animated.View style={[StyleSheet.absoluteFill, videoControlsStyle]} pointerEvents="box-none">
+          <View style={controlStyles.centerControlsContainer} pointerEvents="box-none">
+            {/* Rewind 10s */}
+            <TouchableOpacity
+              onPress={() => !isInteracting && handleRewind10()}
+              style={controlStyles.centerButton}
+            >
+              <Ionicons name="play-back" size={32} color="white" />
+            </TouchableOpacity>
+
+            {/* Play / Pause */}
+            <TouchableOpacity
+              onPress={() => !isInteracting && togglePlay()}
+              style={controlStyles.centerButtonLarge}
+            >
+              <Ionicons name={isPlaying ? "pause" : "play"} size={40} color="white" style={{ marginLeft: isPlaying ? 0 : 4 }} />
+            </TouchableOpacity>
+
+            {/* Forward 10s */}
+            <TouchableOpacity
+              onPress={() => !isInteracting && handleForward10()}
+              style={controlStyles.centerButton}
+            >
+              <Ionicons name="play-forward" size={32} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Bottom Controls Layer */}
+          {/* Video Bottom Controls */}
+          <CustomVideoControls
+            isPlaying={isPlaying}
+            onPlayPause={togglePlay}
+            duration={duration}
+            currentTime={currentTime}
+            onToggleFullscreen={toggleFullscreen}
+            visible={true}
+            onSeek={handleSeek}
+            isLandscape={dimensions.width > dimensions.height}
+            onIsInteracting={setIsInteracting}
+          />
+        </Animated.View>
+      )}
     </View>
   );
 };
@@ -577,7 +730,6 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const [mediaItems, setMediaItems] = useState(allItems && allItems.length > 0 ? allItems : (item ? [item] : []));
   const [currentIndex, setCurrentIndex] = useState(initialIndex || 0);
   const [isZoomed, setIsZoomed] = useState(false);
-  const [isRotating, setIsRotating] = useState(false);
   const flatListRef = useRef(null);
   // Persist video playback state across rotation/re-renders
   const videoStates = useRef({});
@@ -586,7 +738,15 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const [dimensions, setDimensions] = useState(getScreenDimensions());
   // Track if device is in landscape orientation (video maximized)
   const [isLandscape, setIsLandscape] = useState(false);
-  // Removed rotation shared value - using native screen rotation
+  // Use ref instead of state to avoid triggering re-renders during rotation
+  const isRotatingRef = useRef(false);
+  const rotationOpacity = useSharedValue(1);
+  const currentIndexRef = useRef(initialIndex || 0);
+
+  // Keep currentIndexRef in sync for rotation logic
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
 
   // Dialog Context
   const { showConfirm, showAlert } = useDialog();
@@ -620,19 +780,47 @@ export default function ViewerScreen({ route, navigation: navProp }) {
     // Listen for dimension changes (orientation changes)
     const dimensionSubscription = Dimensions.addEventListener('change', ({ window }) => {
       console.log('ViewerScreen: Dimensions changed:', window.width, 'x', window.height);
+
+      // 1. Mark rotation as in-progress immediately
+      isRotatingRef.current = true;
+
+      // 2. Capture stable index BEFORE state updates
+      const stableIndex = currentIndexRef.current;
+
+      // 3. Fade out FlatList to hide the blink/jump
+      rotationOpacity.value = 0;
+
+      // 4. Update states
       const landscape = window.width > window.height;
       setIsLandscape(landscape);
-      setIsRotating(true);
       setDimensions({ width: window.width, height: window.height });
-      // HACK: Hide content briefly to let FlatList layout settle
-      setTimeout(() => setIsRotating(false), 300);
+
+      // 5. Correct scroll position after layout settlement
+      // Using a slightly longer delay to ensure FlatList layout cycle completes
+      setTimeout(() => {
+        if (flatListRef.current) {
+          console.log('ViewerScreen: Correcting scroll to index', stableIndex);
+          flatListRef.current.scrollToIndex({
+            index: stableIndex,
+            animated: false,
+            viewPosition: 0
+          });
+        }
+
+        // 6. Fade back in after scroll correction
+        setTimeout(() => {
+          rotationOpacity.value = withTiming(1, { duration: 150 });
+          // Unlock index updates
+          isRotatingRef.current = false;
+        }, 100);
+      }, 100);
     });
 
     return () => {
       dimensionSubscription?.remove();
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
     };
-  }, []);
+  }, []); // Remove currentIndex dependency, use ref instead
 
   // Configure Audio for Video
   useEffect(() => {
@@ -658,18 +846,8 @@ export default function ViewerScreen({ route, navigation: navProp }) {
     }
   }, [initialIndex, mediaItems.length]);
 
-  // Maintain scroll position when dimensions change (orientation change)
-  useEffect(() => {
-    if (flatListRef.current && currentIndex !== undefined && mediaItems.length > 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToIndex({
-          index: currentIndex,
-          animated: false,
-          viewPosition: 0
-        });
-      }, 50);
-    }
-  }, [dimensions.width, dimensions.height]);
+  // Scroll position is now handled directly in the dimension change listener
+  // This effect is removed to prevent redundant scroll corrections
 
   const currentItem = mediaItems[currentIndex];
 
@@ -803,7 +981,8 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   }), [dimensions.width]);
 
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
-    if (viewableItems.length > 0) {
+    // Only update index if NOT rotating to prevent jumping
+    if (!isRotatingRef.current && viewableItems.length > 0) {
       setCurrentIndex(viewableItems[0].index);
     }
   }).current;
@@ -816,26 +995,32 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const { width: screenWidth, height: screenHeight } = dimensions;
   const styles = useMemo(() => getStyles(screenWidth, screenHeight), [screenWidth, screenHeight]);
 
+  const flatListStyle = useAnimatedStyle(() => ({
+    opacity: rotationOpacity.value,
+  }));
+
   return (
     <GestureDetector gesture={verticalSwipeGesture}>
       <View style={styles.container}>
-        <FlatList
-          ref={flatListRef}
-          data={mediaItems}
-          renderItem={renderItem}
-          keyExtractor={item => item.id?.toString() || Math.random().toString()}
-          horizontal
-          pagingEnabled
-          scrollEnabled={!isZoomed && (!isLandscape || isPhoto)}
-          showsHorizontalScrollIndicator={false}
-          onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
-          getItemLayout={getItemLayout}
-          initialScrollIndex={initialIndex || 0}
-          windowSize={3}
-          maxToRenderPerBatch={2}
-          initialNumToRender={1}
-        />
+        <Animated.View style={[StyleSheet.absoluteFill, flatListStyle]}>
+          <FlatList
+            ref={flatListRef}
+            data={mediaItems}
+            renderItem={renderItem}
+            keyExtractor={item => item.id?.toString() || Math.random().toString()}
+            horizontal
+            pagingEnabled
+            scrollEnabled={!isZoomed && (!isLandscape || isPhoto)}
+            showsHorizontalScrollIndicator={false}
+            onViewableItemsChanged={onViewableItemsChanged}
+            viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
+            getItemLayout={getItemLayout}
+            initialScrollIndex={initialIndex || 0}
+            windowSize={3}
+            maxToRenderPerBatch={2}
+            initialNumToRender={1}
+          />
+        </Animated.View>
 
         {/* Top Bar with Controls - Rendered AFTER FlatList to be on top */}
         <Animated.View style={[styles.safeArea, topBarStyle]} pointerEvents={controlsVisible ? 'auto' : 'none'}>
@@ -884,10 +1069,61 @@ const getStyles = (width, height) => StyleSheet.create({
 const controlStyles = StyleSheet.create({
   controlsContainer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end' },
   centerControls: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  centerControlsContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 40,
+  },
+  initialPlayOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  initialPlayButton: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: '#fff',
+  },
+  centerButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  centerButtonLarge: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
   largePlayButton: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
   bottomBar: { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 24, backgroundColor: 'rgba(0,0,0,0.5)' },
   smallControlBtn: { padding: 8 },
   timeText: { color: '#fff', fontSize: 14, marginHorizontal: 12, fontVariant: ['tabular-nums'] },
-  progressBarContainer: { flex: 1, height: 4, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2, marginHorizontal: 12, overflow: 'hidden' },
-  progressBarFill: { height: '100%', backgroundColor: '#fff' }
+  progressBarContainer: {
+    flex: 1,
+    height: 60,
+    justifyContent: 'center',
+    marginHorizontal: 12,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#fff',
+  }
 });

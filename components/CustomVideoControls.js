@@ -14,26 +14,41 @@ import { Ionicons } from '@expo/vector-icons';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Custom Progress Bar Component
-function ProgressBar({ currentTime, duration, onSeek }) {
+function ProgressBar({ currentTime, duration, onSeek, onIsInteracting }) {
     const [seeking, setSeeking] = useState(false);
-    const progressWidth = useRef(0);
+    const layoutWidth = useRef(0);
+
+    const handleTouch = (evt) => {
+        if (layoutWidth.current > 0 && duration > 0) {
+            const { locationX } = evt.nativeEvent;
+            const percentage = Math.max(0, Math.min(1, locationX / layoutWidth.current));
+            onSeek(percentage * duration);
+        }
+    };
 
     const panResponder = useRef(
         PanResponder.create({
+            // Use Capture phase to grab the touch before any overlay or parent can
+            onStartShouldSetPanResponderCapture: () => true,
             onStartShouldSetPanResponder: () => true,
             onMoveShouldSetPanResponder: () => true,
-            onPanResponderGrant: () => {
+            onPanResponderGrant: (evt) => {
                 setSeeking(true);
+                onIsInteracting?.(true);
+                handleTouch(evt); // Immediate seek on tap
             },
-            onPanResponderMove: (evt, gestureState) => {
-                const { locationX } = evt.nativeEvent;
-                const percentage = Math.max(0, Math.min(1, locationX / progressWidth.current));
-                const newTime = percentage * duration;
-                onSeek(newTime);
+            onPanResponderMove: (evt) => {
+                handleTouch(evt);
             },
             onPanResponderRelease: () => {
                 setSeeking(false);
+                onIsInteracting?.(false);
             },
+            onPanResponderTerminate: () => {
+                setSeeking(false);
+                onIsInteracting?.(false);
+            },
+            onPanResponderTerminationRequest: () => false, // Don't let other gestures take over
         })
     ).current;
 
@@ -43,14 +58,14 @@ function ProgressBar({ currentTime, duration, onSeek }) {
         <View
             style={styles.progressBarContainer}
             onLayout={(e) => {
-                progressWidth.current = e.nativeEvent.layout.width;
+                layoutWidth.current = e.nativeEvent.layout.width;
             }}
             {...panResponder.panHandlers}
         >
-            <View style={styles.progressBarBackground}>
+            <View style={styles.progressBarBackground} pointerEvents="none">
                 <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
             </View>
-            <View style={[styles.progressThumb, { left: `${progress}%` }]} />
+            <View style={[styles.progressThumb, { left: `${progress}%` }]} pointerEvents="none" />
         </View>
     );
 }
@@ -59,7 +74,8 @@ export default function CustomVideoControls({
     player,
     visible,
     onToggleControls,
-    onRequestFullscreen
+    onRequestFullscreen,
+    onIsInteracting
 }) {
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -76,6 +92,12 @@ export default function CustomVideoControls({
             setIsPlaying(newIsPlaying);
         });
 
+        const playbackSubscription = player.addListener('playbackStateChange', (e) => {
+            if (e.playbackState === 'finished') {
+                setIsPlaying(false);
+            }
+        });
+
         const timeSubscription = player.addListener('timeUpdate', (newTime) => {
             setCurrentTime(newTime.currentTime);
             setDuration(newTime.duration || 0);
@@ -83,6 +105,7 @@ export default function CustomVideoControls({
 
         return () => {
             playingSubscription?.remove();
+            playbackSubscription?.remove();
             timeSubscription?.remove();
         };
     }, [player]);
@@ -105,18 +128,33 @@ export default function CustomVideoControls({
     }, [player]);
 
     const handlePlayPause = useCallback(() => {
-        if (!player) return;
+        if (!player || player.status !== 'readyToPlay') return;
 
-        if (isPlaying) {
-            player.pause();
-        } else {
-            player.play();
+        try {
+            const isFinished = player.playbackState === 'finished';
+
+            if (isFinished) {
+                player.currentTime = 0;
+                player.play();
+            } else {
+                if (isPlaying) {
+                    player.pause();
+                } else {
+                    player.play();
+                }
+            }
+        } catch (error) {
+            console.log('Failed to toggle play/pause:', error);
         }
     }, [player, isPlaying]);
 
     const handleSeek = useCallback((value) => {
-        if (!player) return;
-        player.currentTime = value;
+        if (!player || player.status !== 'readyToPlay') return;
+        try {
+            player.currentTime = value;
+        } catch (error) {
+            console.log('Failed to seek:', error);
+        }
     }, [player]);
 
     const handleAudioTrackSelect = useCallback((track) => {
@@ -179,6 +217,7 @@ export default function CustomVideoControls({
                         currentTime={currentTime}
                         duration={duration}
                         onSeek={handleSeek}
+                        onIsInteracting={onIsInteracting}
                     />
                     <Text style={styles.timeText}>{formatTime(duration)}</Text>
                 </View>
@@ -273,7 +312,7 @@ const styles = StyleSheet.create({
     },
     progressBarContainer: {
         flex: 1,
-        height: 40,
+        height: 60,
         justifyContent: 'center',
         marginHorizontal: 8,
     },
