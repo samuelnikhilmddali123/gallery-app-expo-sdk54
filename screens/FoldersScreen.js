@@ -160,6 +160,7 @@ export default function FoldersScreen({ navigation }) {
         return unsubscribe;
     }, [navigation, loadFolders]);
 
+
     const handlePickCover = async () => {
         try {
             const result = await ImagePicker.launchImageLibraryAsync({
@@ -303,15 +304,9 @@ export default function FoldersScreen({ navigation }) {
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
-            <SafeAreaView style={styles.safeArea} edges={['top']}>
+            <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={['top']}>
                 <View style={styles.header}>
                     <Text style={[styles.headerTitle, { color: colors.text }]}>Folders</Text>
-                    <TouchableOpacity
-                        style={[styles.addButton, { backgroundColor: colors.primary }]} // Assuming primary color exists or use generic
-                        onPress={() => setCreateModalVisible(true)}
-                    >
-                        <Ionicons name="add" size={24} color="#FFF" />
-                    </TouchableOpacity>
                 </View>
 
                 {loading ? (
@@ -324,7 +319,7 @@ export default function FoldersScreen({ navigation }) {
                         renderItem={renderFolderItem}
                         keyExtractor={item => item.id}
                         numColumns={COLUMN_COUNT}
-                        contentContainerStyle={styles.list}
+                        contentContainerStyle={[styles.list, { paddingBottom: 100 }]} // Add padding to avoid FAB overlap
                         columnWrapperStyle={styles.columnWrapper}
                         ListEmptyComponent={
                             <View style={styles.emptyContainer}>
@@ -434,7 +429,7 @@ export default function FoldersScreen({ navigation }) {
                     style={[
                         styles.fab,
                         {
-                            backgroundColor: colors.fabColor,
+                            backgroundColor: '#007AFF', // Explicitly blue as requested
                             shadowOpacity: isDarkMode ? 0.25 : 0.1,
                             shadowRadius: isDarkMode ? 3.84 : 2,
                         }
@@ -442,6 +437,7 @@ export default function FoldersScreen({ navigation }) {
                     onPress={() => setCreateModalVisible(true)}
                     activeOpacity={0.8}
                 >
+                    <Ionicons name="add" size={32} color="#FFF" />
                 </TouchableOpacity>
 
             </SafeAreaView>
@@ -482,6 +478,24 @@ const styles = StyleSheet.create({
     headerTitle: {
         fontSize: 28,
         fontWeight: '700',
+    },
+    searchContainer: {
+        paddingHorizontal: 20,
+        paddingBottom: 8,
+    },
+    searchBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        height: 36,
+        borderRadius: 18,
+        gap: 8,
+    },
+    searchInput: {
+        flex: 1,
+        fontSize: 15,
+        paddingVertical: 0,
+        height: '100%',
     },
     addButton: {
         width: 40,

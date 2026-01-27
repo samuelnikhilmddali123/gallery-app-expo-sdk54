@@ -9,6 +9,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { SearchProvider } from './contexts/SearchContext';
 import { VaultProvider, useVault } from './contexts/VaultContext';
 import { DialogProvider } from './contexts/DialogContext';
 import { Ionicons } from '@expo/vector-icons';
@@ -205,11 +206,13 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
-        <DialogProvider>
-          <VaultProvider>
-            <AppNavigator />
-          </VaultProvider>
-        </DialogProvider>
+        <SearchProvider>
+          <DialogProvider>
+            <VaultProvider>
+              <AppNavigator />
+            </VaultProvider>
+          </DialogProvider>
+        </SearchProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
   );

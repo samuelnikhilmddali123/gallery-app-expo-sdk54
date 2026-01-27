@@ -109,7 +109,7 @@ export default function VaultSetupScreen({ onComplete, onCancel }) {
       style={[styles.container, { backgroundColor: colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={['top', 'bottom']}>
         {/* Header with Close Button */}
         <View style={[styles.topHeader, { borderBottomColor: colors.border }]}>
           <TouchableOpacity onPress={handleCancel} style={styles.closeButton}>

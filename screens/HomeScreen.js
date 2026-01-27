@@ -11,6 +11,7 @@ import {
   Alert,
   Platform,
   AppState,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -25,15 +26,45 @@ import { useDialog } from '../contexts/DialogContext';
 
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
+import { useSearch } from '../contexts/SearchContext';
+import { getFolders } from '../services/folderService';
+import { Image as ExpoImage } from 'expo-image';
 import { removeMediaFromVault } from '../services/vaultService';
 import { filterVaultMedia, moveMediaToVault } from '../services/mediaService';
 import { moveMediaToAppTrash } from '../services/trashService';
 import { addMediaToFolder } from '../services/folderService';
+import { CATEGORIES, categorizeMedia } from '../services/categorizationService';
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
 const GAP = 3;
 const ITEM_SIZE = (width - GAP * (NUM_COLUMNS + 1)) / NUM_COLUMNS;
+
+// Helper function for video duration
+const formatDuration = (duration) => {
+  if (!duration) return '';
+  const minutes = Math.floor(duration / 60);
+  const seconds = Math.floor(duration % 60);
+  return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+};
+
+// Helper function to fetch all media for indexing
+const getAllMedia = async () => {
+  try {
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') return [];
+
+    const result = await MediaLibrary.getAssetsAsync({
+      first: 2000, // Fetch a large enough batch for search indexing
+      sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+      mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+    });
+    return result.assets;
+  } catch (error) {
+    console.error('Error in getAllMedia:', error);
+    return [];
+  }
+};
 
 // Memoized MediaItem component for performance - defined outside to avoid hooks issues
 const MediaItem = React.memo(({ item, index, isSelected, onPress, onLongPress, colors }) => {
@@ -69,7 +100,8 @@ const MediaItem = React.memo(({ item, index, isSelected, onPress, onLongPress, c
         </View>
       )}
 
-      {(item.mediaType === 'video' || item.mediaType === MediaLibrary.MediaType.video || (item.duration && item.duration > 0)) && (
+      {/* Safer condition to avoid rendering '0' text */}
+      {!!(item.mediaType === 'video' || item.mediaType === MediaLibrary.MediaType.video || (item.duration && item.duration > 0)) && (
         <View style={styles.videoBadge}>
           <Ionicons name="play" size={16} color="#fff" />
         </View>
@@ -82,10 +114,12 @@ export default function HomeScreen({ navigation, route }) {
   // All hooks must be called before any conditional returns
   const { colors } = useTheme();
   const { isVaultSetup, verifyPassword, unlockVault, isVaultUnlocked } = useVault();
+  const { searchQuery, setSearchQuery } = useSearch();
   const [media, setMedia] = useState([]);
+  const [albums, setAlbums] = useState([]);
+  const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(false); // Start with false to show UI immediately
   const [refreshing, setRefreshing] = useState(false);
-  const [query, setQuery] = useState('');
   const [menuVisible, setMenuVisible] = useState(false);
   const [settingsPanelVisible, setSettingsPanelVisible] = useState(false);
   const menuButtonRef = useRef(null);
@@ -95,21 +129,118 @@ export default function HomeScreen({ navigation, route }) {
   const [selectedItems, setSelectedItems] = useState(new Set());
   const [targetFolderId, setTargetFolderId] = useState(null);
   const [targetFolderName, setTargetFolderName] = useState(null);
+  const [categorizedMedia, setCategorizedMedia] = useState({});
+  const [isCategorizing, setIsCategorizing] = useState(false);
+
+  // Pagination & Loading
   const [pageInfo, setPageInfo] = useState({ hasNextPage: true, endCursor: undefined });
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Dialog Context
   const { showConfirm, showAlert } = useDialog();
 
-  // Memoized values - must be after all useState hooks
-  const filteredMedia = useMemo(() => {
-    if (!query) return media;
-    const q = query.toLowerCase();
-    return media.filter(m =>
-      (m.filename || '').toLowerCase().includes(q)
-    );
-  }, [query, media]);
+  // Ref to track if we've loaded initial data
+  const dataLoadedRef = useRef(false);
 
+  // Load all data (Media, Albums, Folders)
+  const loadAllData = useCallback(async () => {
+    try {
+      if (!dataLoadedRef.current) setLoading(true);
+
+      const [mediaResult, albumsResult, foldersResult] = await Promise.all([
+        getAllMedia(),
+        MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true }),
+        getFolders()
+      ]);
+
+      setMedia(mediaResult);
+      setAlbums(albumsResult);
+      setFolders(foldersResult);
+
+      dataLoadedRef.current = true;
+
+      // Start categorization in background
+      startCategorization(mediaResult);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const startCategorization = useCallback(async (mediaItems) => {
+    if (mediaItems.length === 0 || isCategorizing) return;
+
+    setIsCategorizing(true);
+    try {
+      const result = await categorizeMedia(mediaItems);
+      setCategorizedMedia(result || {});
+    } catch (error) {
+      console.error('Categorization error:', error);
+    } finally {
+      setIsCategorizing(false);
+    }
+  }, [isCategorizing]);
+
+  // Initial load
+  useEffect(() => {
+    loadAllData();
+  }, [loadAllData]);
+
+  // Memoized search results
+  const searchResults = useMemo(() => {
+    if (!searchQuery) return { media: media, albums: [], folders: [], isSearching: false };
+
+    const q = searchQuery.toLowerCase().trim();
+
+    // 1. Filter Albums
+    const matchedAlbums = albums.filter(a => (a.title || '').toLowerCase().includes(q));
+
+    // 2. Filter Folders
+    const matchedFolders = folders.filter(f => (f.name || '').toLowerCase().includes(q));
+
+    // 3. Filter Media (Filename + Categories)
+
+    // Find categories that match the query
+    const matchingCategoryIds = Object.values(CATEGORIES)
+      .filter(cat =>
+        cat.name.toLowerCase().includes(q) ||
+        cat.keywords.some(kw => kw.toLowerCase().includes(q))
+      )
+      .map(cat => cat.id);
+
+    // Get all media IDs that belong to matching categories
+    const mediaIdsFromCategories = new Set();
+    matchingCategoryIds.forEach(catId => {
+      const items = categorizedMedia[catId] || [];
+      items.forEach(item => mediaIdsFromCategories.add(item.id.toString()));
+    });
+
+    const matchedMedia = media.filter(m => {
+      const filenameMatch = (m.filename || '').toLowerCase().includes(q);
+      const categoryMatch = mediaIdsFromCategories.has(m.id.toString());
+      return filenameMatch || categoryMatch;
+    });
+
+    return {
+      media: matchedMedia,
+      albums: matchedAlbums,
+      folders: matchedFolders,
+      isSearching: true
+    };
+  }, [searchQuery, media, albums, folders, categorizedMedia]);
+
+  // Used for selection mode consistency
+  const activeMediaList = searchQuery ? searchResults.media : media;
+
+  const filteredMedia = activeMediaList; // Backward compatibility for existing code using filteredMedia
+
+  // Handle refresh
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadAllData();
+  };
   // Handle Vault Add Mode from route params - using useFocusEffect to ensure it triggers on tab switch
   useFocusEffect(
     useCallback(() => {
@@ -117,12 +248,13 @@ export default function HomeScreen({ navigation, route }) {
         setIsSelectionMode(true);
         setSelectionPurpose('vaultAdd');
         setSelectedItems(new Set());
-        setQuery(''); // Clear any search query preventing visibility
+        setSearchQuery(''); // Clear any search query preventing visibility
 
         // Force load if empty (e.g. first time access via Vault) - but don't show loader
         if (media.length === 0) {
           console.log('Media empty in Vault Add mode - forcing load without loader');
-          loadGallery(false); // Don't show loading screen
+          // loadGallery(false); // Helper function not available, rely on loadAllData
+          loadAllData();
         }
       } else if (route?.params?.selectionPurpose === 'folderAdd') {
         setIsSelectionMode(true);
@@ -130,13 +262,14 @@ export default function HomeScreen({ navigation, route }) {
         setTargetFolderId(route.params.targetFolderId);
         setTargetFolderName(route.params.targetFolderName);
         setSelectedItems(new Set());
-        setQuery('');
+        setSearchQuery('');
 
         if (media.length === 0) {
-          loadGallery(false); // Don't show loading screen
+          // loadGallery(false);
+          loadAllData();
         }
       }
-    }, [route?.params?.selectionPurpose, navigation, media.length])
+    }, [route?.params?.selectionPurpose, navigation, media.length, loadAllData])
   );
 
   // Incremental update when returning from crop OR app focus - NO full reload
@@ -650,13 +783,13 @@ export default function HomeScreen({ navigation, route }) {
   /*
   useEffect(() => {
     console.log("HomeScreen: Setting up MediaLibrary listener...");
-
+  
     const subscription = MediaLibrary.addListener(() => {
       console.log("HomeScreen: MediaLibrary changed! Auto-refreshing...");
       // Refresh gallery when new photos are added
       loadGallery(false, true); // reset = true to get latest photos
     });
-
+  
     return () => {
       console.log("HomeScreen: Removing MediaLibrary listener");
       subscription.remove();
@@ -674,12 +807,12 @@ export default function HomeScreen({ navigation, route }) {
   useEffect(() => {
     // Hidden Vault Access Logic
     const timeoutId = setTimeout(async () => {
-      const trimmedQuery = query.trim();
+      const trimmedQuery = searchQuery.trim();
       if (!trimmedQuery) return;
 
       // 1. Setup Trigger (if not setup)
       if (!isVaultSetup && trimmedQuery.toLowerCase() === 'setup vault') {
-        setQuery('');
+        setSearchQuery('');
         navigation.navigate('VaultSetup');
         return;
       }
@@ -690,7 +823,7 @@ export default function HomeScreen({ navigation, route }) {
           const isValid = await verifyPassword(trimmedQuery);
           if (isValid) {
             unlockVault();
-            setQuery(''); // Clear password from search
+            setSearchQuery(''); // Clear password from search
             navigation.navigate('VaultHome');
           }
         } catch (error) {
@@ -700,7 +833,7 @@ export default function HomeScreen({ navigation, route }) {
     }, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [query, isVaultSetup, isVaultUnlocked, verifyPassword, unlockVault, navigation]);
+  }, [searchQuery, isVaultSetup, isVaultUnlocked, verifyPassword, unlockVault, navigation]);
 
   const handleMenuPress = () => {
     console.log('Menu button pressed');
@@ -723,6 +856,10 @@ export default function HomeScreen({ navigation, route }) {
       case 'trash':
         navigation.navigate('Trash');
         break;
+      case 'select':
+        setIsSelectionMode(true);
+        setSelectionPurpose(undefined);
+        break;
       default:
         break;
     }
@@ -739,6 +876,156 @@ export default function HomeScreen({ navigation, route }) {
       </SafeAreaView>
     );
   }
+
+  const renderContent = () => {
+    // Search Results View
+    if (searchResults.isSearching) {
+      const hasAlbums = searchResults.albums.length > 0;
+      const hasFolders = searchResults.folders.length > 0;
+      const hasMedia = searchResults.media.length > 0;
+      const isEmpty = !hasAlbums && !hasFolders && !hasMedia;
+
+      if (isEmpty) {
+        return (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="search-outline" size={64} color={colors.searchPlaceholder} />
+            <Text style={[styles.emptyText, { color: colors.searchPlaceholder }]}>
+              No items found
+            </Text>
+          </View>
+        );
+      }
+
+      return (
+        <ScrollView style={styles.searchResultsContainer} keyboardShouldPersistTaps="handled">
+          {hasAlbums && (
+            <View style={styles.resultSection}>
+              <Text style={[styles.sectionHeader, { color: colors.text }]}>Albums ({searchResults.albums.length})</Text>
+              {searchResults.albums.map(album => (
+                <TouchableOpacity
+                  key={album.id}
+                  style={styles.searchResultItem}
+                  onPress={() => navigation.navigate('AlbumView', { album })}
+                >
+                  <View style={styles.searchResultIcon}>
+                    {album.coverUri ? (
+                      <ExpoImage source={{ uri: album.coverUri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
+                    ) : (
+                      <Ionicons name="images" size={24} color={colors.icon} />
+                    )}
+                  </View>
+                  <View style={styles.searchResultInfo}>
+                    <Text style={[styles.searchResultTitle, { color: colors.text }]} numberOfLines={1}>{album.title}</Text>
+                    <Text style={[styles.searchResultSubtitle, { color: colors.searchPlaceholder }]}>{album.assetCount} items</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={colors.icon} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {hasFolders && (
+            <View style={styles.resultSection}>
+              <Text style={[styles.sectionHeader, { color: colors.text }]}>Folders ({searchResults.folders.length})</Text>
+              {searchResults.folders.map(folder => (
+                <TouchableOpacity
+                  key={folder.id}
+                  style={styles.searchResultItem}
+                  onPress={() => navigation.navigate('FolderDetail', { folderId: folder.id, folderName: folder.name })}
+                >
+                  <View style={styles.searchResultIcon}>
+                    {folder.coverUri ? (
+                      <ExpoImage source={{ uri: folder.coverUri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
+                    ) : (
+                      <Ionicons name="folder" size={24} color={colors.icon} />
+                    )}
+                  </View>
+                  <View style={styles.searchResultInfo}>
+                    <Text style={[styles.searchResultTitle, { color: colors.text }]} numberOfLines={1}>{folder.name}</Text>
+                    <Text style={[styles.searchResultSubtitle, { color: colors.searchPlaceholder }]}>Folder</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={colors.icon} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {hasMedia && (
+            <View style={styles.resultSection}>
+              <Text style={[styles.sectionHeader, { color: colors.text }]}>Photos & Videos ({searchResults.media.length})</Text>
+              <View style={styles.gridContainer}>
+                {searchResults.media.map((item, index) => {
+                  const itemId = item.id.toString();
+                  const isSelected = selectedItems.has(itemId);
+                  return (
+                    <MediaItem
+                      key={`${item.id}_${item.uri || ''}`}
+                      item={item}
+                      index={index}
+                      isSelected={isSelected}
+                      onPress={() => {
+                        if (isSelectionMode) {
+                          handleItemPress(item, index);
+                        } else {
+                          navigation.navigate('Viewer', {
+                            item,
+                            allItems: searchResults.media,
+                            initialIndex: index
+                          });
+                        }
+                      }}
+                      onLongPress={() => handleLongPress(item)}
+                      colors={colors}
+                    />
+                  );
+                })}
+              </View>
+            </View>
+          )}
+          <View style={{ height: 100 }} />
+        </ScrollView>
+      );
+    }
+
+    // Default Grid View
+    return (
+      <FlatList
+        data={filteredMedia}
+        keyExtractor={keyExtractor}
+        numColumns={NUM_COLUMNS}
+        renderItem={renderItem}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.grid,
+          filteredMedia.length === 0 && { flex: 1 }
+        ]}
+        extraData={{ isSelectionMode, selectedItems }}
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
+        onEndReached={handleLoadMore}
+        onEndReachedThreshold={0.5}
+        windowSize={5}
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={10}
+        updateCellsBatchingPeriod={50}
+        initialNumToRender={15}
+        ListEmptyComponent={
+          !loading && (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ fontSize: 18, color: colors.text, opacity: 0.6 }}>No photos found</Text>
+            </View>
+          )
+        }
+        ListFooterComponent={
+          loadingMore ? (
+            <View style={{ paddingVertical: 20 }}>
+              <ActivityIndicator size="small" color={colors.icon} />
+            </View>
+          ) : null
+        }
+      />
+    );
+  };
 
   return (
     <View style={[styles.safe, { backgroundColor: colors.background }]}>
@@ -789,14 +1076,19 @@ export default function HomeScreen({ navigation, route }) {
               <View style={[styles.searchBar, { backgroundColor: colors.searchBar }]}>
                 <Ionicons name="search" size={16} color={colors.searchPlaceholder} />
                 <TextInput
-                  value={query}
-                  onChangeText={setQuery}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
                   placeholder="name, people, places"
                   placeholderTextColor={colors.searchPlaceholder}
                   style={[styles.searchInput, { color: colors.searchText }]}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')}>
+                    <Ionicons name="close-circle" size={16} color={colors.searchPlaceholder} />
+                  </TouchableOpacity>
+                )}
               </View>
               <TouchableOpacity
                 ref={menuButtonRef}
@@ -808,41 +1100,7 @@ export default function HomeScreen({ navigation, route }) {
             </View>
           )}
 
-          <FlatList
-            data={filteredMedia}
-            keyExtractor={keyExtractor}
-            numColumns={NUM_COLUMNS}
-            renderItem={renderItem}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={[
-              styles.grid,
-              filteredMedia.length === 0 && { flex: 1 }
-            ]}
-            extraData={{ isSelectionMode, selectedItems }}
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            onEndReached={handleLoadMore}
-            onEndReachedThreshold={0.5}
-            windowSize={5}
-            removeClippedSubviews={true}
-            maxToRenderPerBatch={10}
-            updateCellsBatchingPeriod={50}
-            initialNumToRender={15}
-            ListEmptyComponent={
-              !loading && (
-                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ fontSize: 18, color: colors.text, opacity: 0.6 }}>No photos found</Text>
-                </View>
-              )
-            }
-            ListFooterComponent={
-              loadingMore ? (
-                <View style={{ paddingVertical: 20 }}>
-                  <ActivityIndicator size="small" color={colors.icon} />
-                </View>
-              ) : null
-            }
-          />
+          {renderContent()}
         </View>
 
         <DropdownMenu
@@ -870,6 +1128,73 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#333333',
+  },
+  searchResultIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#333', // fallback
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  searchResultInfo: {
+    flex: 1,
+  },
+  searchResultTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  searchResultSubtitle: {
+    fontSize: 14,
+  },
+  searchResultsContainer: {
+    flex: 1,
+  },
+  resultSection: {
+    marginBottom: 24,
+  },
+  sectionHeader: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginLeft: 16,
+    marginTop: 16,
+    marginBottom: 12,
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 0,
+  },
+  mediaItem: {
+    margin: 1,
+  },
+  mediaImage: {
+    width: '100%',
+    height: '100%',
+  },
+  videoIndicator: {
+    position: 'absolute',
+    bottom: 4,
+    right: 4,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  durationText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   header: {
     flexDirection: 'row',

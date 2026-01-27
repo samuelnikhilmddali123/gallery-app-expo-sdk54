@@ -26,12 +26,12 @@ export default function AlbumsScreen({ navigation }) {
       }
 
       const albumsData = await MediaLibrary.getAlbumsAsync();
-      
+
       // Get assets for each album in parallel (optimized)
       // Limit initial load to first 20 albums for speed
       const albumsToLoad = albumsData.slice(0, 20);
       const remainingAlbums = albumsData.slice(20);
-      
+
       const albumsWithAssets = await Promise.all(
         albumsToLoad.map(async (album) => {
           try {
@@ -64,7 +64,7 @@ export default function AlbumsScreen({ navigation }) {
 
       setAlbums([...albumsWithAssets, ...remainingWithDefaults]);
       setLoading(false);
-      
+
       // Load cover images for remaining albums in background
       if (remainingAlbums.length > 0) {
         setTimeout(async () => {

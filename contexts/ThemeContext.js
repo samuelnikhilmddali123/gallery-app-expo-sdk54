@@ -1,5 +1,8 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import * as NavigationBar from 'expo-navigation-bar';
 
 const ThemeContext = createContext();
 
@@ -34,6 +37,26 @@ export const ThemeProvider = ({ children }) => {
       loadTheme();
     }, 0);
   }, []);
+
+  // Sync navigation bar color with theme
+  useEffect(() => {
+    const updateNavigationBar = async () => {
+      if (Platform.OS === 'android') {
+        try {
+          // Set navigation bar background color
+          const backgroundColor = isDarkMode ? '#000000' : '#ffffff';
+          await NavigationBar.setBackgroundColorAsync(backgroundColor);
+
+          // Set navigation bar button style (light icons on dark background)
+          await NavigationBar.setButtonStyleAsync(isDarkMode ? 'light' : 'dark');
+        } catch (error) {
+          console.error('Error updating navigation bar:', error);
+        }
+      }
+    };
+
+    updateNavigationBar();
+  }, [isDarkMode]);
 
   // Save theme preference
   const toggleDarkMode = async () => {

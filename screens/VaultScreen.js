@@ -176,6 +176,7 @@ export default function VaultScreen({ navigation, onLock }) {
             onPress={() => {
               lockVault();
               if (onLock) onLock();
+              navigation.goBack();
             }}
             style={styles.backButton}
           >

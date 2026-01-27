@@ -55,6 +55,7 @@ export default function FolderDetailScreen({ navigation, route }) {
         }
     }, [folderId]);
 
+
     useEffect(() => {
         loadMedia();
     }, [loadMedia]);

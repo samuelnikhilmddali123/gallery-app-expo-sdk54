@@ -39,6 +39,17 @@ export default function DropdownMenu({ visible, onClose, onSelect, anchorPositio
             },
           ]}
         >
+          <TouchableOpacity
+            key="select"
+            style={styles.menuItem}
+            onPress={() => {
+              onSelect('select');
+              onClose();
+            }}
+          >
+            <Ionicons name="checkmark-circle-outline" size={20} color={colors.text} />
+            <Text style={[styles.menuItemText, { color: colors.text }]}>Select</Text>
+          </TouchableOpacity>
           {menuOptions.map((option) => (
             <TouchableOpacity
               key={option.id}

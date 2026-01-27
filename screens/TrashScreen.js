@@ -219,8 +219,8 @@ export default function TrashScreen({ navigation }) {
     } else {
       // Normal behavior - open viewer
       navigation.navigate('Viewer', {
-        item,
-        allItems: trashItems,
+        item: { ...item, isTrash: true },
+        allItems: trashItems.map(i => ({ ...i, isTrash: true })),
         initialIndex: index
       });
     }
