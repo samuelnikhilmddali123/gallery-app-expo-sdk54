@@ -692,32 +692,30 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
 
   return (
     <View
-      style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center' }}
+      style={{
+        width: dimensions.width,
+        height: dimensions.height,
+        justifyContent: 'center',
+        backgroundColor: '#000' // Dark background to avoid flash
+      }}
       onLayout={(event) => {
         const { width, height } = event.nativeEvent.layout;
         setLayout({ width, height });
       }}
     >
-      {imageUri ? (
-        <ZoomableImage
-          key={imageKey}
-          source={{ uri: imageUri }}
-          style={{ width: '100%', height: '100%' }}
-          contentFit="contain"
-          cachePolicy="memory-disk"
-          recyclingKey={imageKey}
-          onZoomChange={onZoomChange}
-          isActive={isActive}
-          onPress={onToggleUI}
-          containerWidth={layout.width}
-          containerHeight={layout.height}
-        />
-      ) : (
-        <View style={{ justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#fff" />
-          <Text style={{ color: '#fff', marginTop: 10 }}>No image source available</Text>
-        </View>
-      )}
+      <ZoomableImage
+        key={imageKey}
+        source={{ uri: imageUri }}
+        style={{ width: '100%', height: '100%' }}
+        contentFit="contain"
+        cachePolicy="memory-disk"
+        recyclingKey={imageKey}
+        onZoomChange={onZoomChange}
+        isActive={isActive}
+        onPress={onToggleUI}
+        containerWidth={layout.width}
+        containerHeight={layout.height}
+      />
     </View>
   );
 };
