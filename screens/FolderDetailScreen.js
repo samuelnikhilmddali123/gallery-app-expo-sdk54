@@ -14,8 +14,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '../contexts/ThemeContext';
+import { useDialog } from '../contexts/DialogContext';
 import { getFolderMedia, addMediaToFolder, deleteFolder, removeMediaFromFolder } from '../services/folderService';
 import { moveMediaToAppTrash } from '../services/trashService';
+import * as MediaLibrary from 'expo-media-library';
 
 const getScreenDimensions = () => {
     const { width, height } = Dimensions.get('window');
@@ -29,6 +31,7 @@ const getItemSize = (screenWidth) => (screenWidth - (GAP * (COLUMN_COUNT - 1))) 
 export default function FolderDetailScreen({ navigation, route }) {
     const { folderId, folderName } = route.params;
     const { colors } = useTheme();
+    const { showCustomConfirm, showAlert } = useDialog();
     const [media, setMedia] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -98,12 +101,13 @@ export default function FolderDetailScreen({ navigation, route }) {
         const itemsToRemove = Array.from(selectedItems);
         if (itemsToRemove.length === 0) return;
 
-        Alert.alert(
-            `Select an action for ${itemsToRemove.length} photos`,
+        showCustomConfirm(
+            `Action for ${itemsToRemove.length} items`,
+            "Choose how you want to proceed.",
             [
-                { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Remove from Folder',
+                    style: 'default',
                     onPress: async () => {
                         try {
                             await removeMediaFromFolder(folderId, itemsToRemove);
@@ -111,34 +115,43 @@ export default function FolderDetailScreen({ navigation, route }) {
                             setIsSelectionMode(false);
                             loadMedia();
                         } catch (e) {
-                            Alert.alert('Error', 'Failed to remove photos');
+                            showAlert('Error', 'Failed to remove items');
                         }
                     }
                 },
                 {
-                    text: 'Move to Trash',
-                    style: 'destructive',
+                    text: 'Trash',
+                    style: 'default',
                     onPress: async () => {
                         const successfulIds = [];
                         const failedItems = [];
+                        const mediaLibraryIds = [];
 
                         try {
                             setLoading(true);
-                            // 1. Move items to App Trash (copies & deletes from device)
                             const selectedMedia = media.filter(m => itemsToRemove.includes(m.id));
 
-                            // Process serially to ensure safety
                             for (const item of selectedMedia) {
                                 try {
-                                    await moveMediaToAppTrash(item);
-                                    successfulIds.push(item.id);
+                                    const result = await moveMediaToAppTrash(item);
+                                    if (result) {
+                                        successfulIds.push(item.id);
+                                        if (item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_')) {
+                                            mediaLibraryIds.push(item.id);
+                                        }
+                                    }
                                 } catch (err) {
-                                    console.error(`Failed to trash item ${item.id}:`, err);
                                     failedItems.push(item);
                                 }
                             }
 
-                            // 2. Remove references from this folder only for successful items
+                            if (mediaLibraryIds.length > 0) {
+                                const { status } = await MediaLibrary.requestPermissionsAsync();
+                                if (status === 'granted') {
+                                    await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                                }
+                            }
+
                             if (successfulIds.length > 0) {
                                 await removeMediaFromFolder(folderId, successfulIds);
                             }
@@ -148,17 +161,52 @@ export default function FolderDetailScreen({ navigation, route }) {
                             loadMedia();
 
                             if (failedItems.length > 0) {
-                                setTimeout(() => {
-                                    Alert.alert('Incomplete', `${failedItems.length} items could not be moved to trash.`);
-                                }, 500);
+                                showAlert('Incomplete', `${failedItems.length} items could not be moved to trash.`);
                             }
                         } catch (e) {
-                            console.error('Error in trash operation:', e);
-                            Alert.alert('Error', 'Failed to perform trash operation');
+                            showAlert('Error', 'Failed to perform trash operation');
                         } finally {
                             setLoading(false);
                         }
                     }
+                },
+                {
+                    text: 'Permanently delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            setLoading(true);
+                            const selectedMedia = media.filter(m => itemsToRemove.includes(m.id));
+                            const mediaLibraryIds = selectedMedia
+                                .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
+                                .map(item => item.id);
+
+                            if (mediaLibraryIds.length > 0) {
+                                const { status } = await MediaLibrary.requestPermissionsAsync();
+                                if (status === 'granted') {
+                                    const success = await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                                    if (success) {
+                                        await removeMediaFromFolder(folderId, itemsToRemove);
+                                    }
+                                }
+                            } else {
+                                await removeMediaFromFolder(folderId, itemsToRemove);
+                            }
+
+                            setSelectedItems(new Set());
+                            setIsSelectionMode(false);
+                            loadMedia();
+                        } catch (e) {
+                            showAlert('Error', 'Failed to delete items');
+                        } finally {
+                            setLoading(false);
+                        }
+                    }
+                },
+                {
+                    text: 'Cancel',
+                    style: 'cancel',
+                    onPress: () => { }
                 }
             ]
         );
@@ -239,9 +287,7 @@ export default function FolderDetailScreen({ navigation, route }) {
                             </TouchableOpacity>
                         ) : (
                             <>
-                                <TouchableOpacity onPress={handleAddPhotos} style={styles.actionButton}>
-                                    <Ionicons name="add" size={28} color={colors.text} />
-                                </TouchableOpacity>
+
                                 <TouchableOpacity onPress={deleteThisFolder} style={styles.actionButton}>
                                     <Ionicons name="ellipsis-vertical" size={20} color={colors.text} />
                                 </TouchableOpacity>

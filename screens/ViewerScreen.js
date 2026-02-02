@@ -627,41 +627,66 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
 // --- Image Content Component ---
 const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKey, dimensions }) => {
-  const [imageUri, setImageUri] = useState(null);
-  const [isReady, setIsReady] = useState(false); // NEW: Gate rendering
-  const loadedIdRef = useRef(null); // Track which image ID we've loaded
+  // Initialize with synchronously available URI - NO ASYNC BLOCKING
+  const [imageUri, setImageUri] = useState(() => {
+    // Prioritize URIs based on source type
+    const isVault = mediaItem.id && mediaItem.id.toString().startsWith('vault_');
+    const isTrash = mediaItem.isTrash || mediaItem.isAppTrash;
+
+    // Return immediately available URI
+    if (isVault || isTrash) {
+      return mediaItem.filePath || mediaItem.uri || mediaItem.localUri;
+    }
+    return mediaItem.uri || mediaItem.localUri || mediaItem.filePath;
+  });
+
+  const loadedIdRef = useRef(null);
   const screenDims = Dimensions.get('window');
   const [layout, setLayout] = useState({ width: screenDims.width, height: screenDims.height });
 
   useEffect(() => {
-    // Reset when ID changes
-    setIsReady(false);
-    setImageUri(null);
-    loadedIdRef.current = null;
-
+    // Reset URI when media item changes
     const currentKey = `${mediaItem.id}_${refreshKey || ''}`;
+
+    // If switching to a new item, reset to its immediate URI
+    if (loadedIdRef.current !== currentKey) {
+      const isVault = mediaItem.id && mediaItem.id.toString().startsWith('vault_');
+      const isTrash = mediaItem.isTrash || mediaItem.isAppTrash;
+
+      const immediateUri = (isVault || isTrash)
+        ? (mediaItem.filePath || mediaItem.uri || mediaItem.localUri)
+        : (mediaItem.uri || mediaItem.localUri || mediaItem.filePath);
+
+      setImageUri(immediateUri);
+      loadedIdRef.current = currentKey;
+    }
+
+    // NON-BLOCKING: Try to enhance URI in background
+    // This runs AFTER the image is already rendering
     let isMounted = true;
 
-    const load = async () => {
-      // Resolve best image URI (similar to original logic)
-      let uri = mediaItem.uri || mediaItem.filePath || mediaItem.localUri;
-      if (mediaItem.id && !mediaItem.id.toString().startsWith('vault_')) {
+    const enhanceUri = async () => {
+      // Skip enhancement for vault items (they already have optimal path)
+      if (mediaItem.id && !mediaItem.id.toString().startsWith('vault_') && !mediaItem.id.toString().startsWith('picked_')) {
         try {
           const asset = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
-          uri = asset.localUri || asset.uri || uri;
-        } catch (e) { console.error('Asset info error:', e); }
-      }
+          const enhancedUri = asset.localUri || asset.uri;
 
-      console.log('ImageContent resolved URI:', uri);
-      if (isMounted && uri) {
-        setImageUri(uri);
-        loadedIdRef.current = currentKey; // Mark as loaded
-        setIsReady(true);
+          // Only update if we got a different/better URI
+          if (isMounted && enhancedUri && enhancedUri !== imageUri) {
+            console.log('ImageContent: Enhanced URI from MediaLibrary');
+            setImageUri(enhancedUri);
+          }
+        } catch (e) {
+          // Silently fail - we already have the initial URI rendering
+          console.log('ImageContent: MediaLibrary enhancement skipped:', e.message);
+        }
       }
     };
-    load();
+
+    enhanceUri();
     return () => { isMounted = false; };
-  }, [mediaItem.id, refreshKey]); // Depend only on items execution
+  }, [mediaItem.id, refreshKey]);
 
   const imageKey = `${mediaItem.id}_${refreshKey || ''}`;
 
@@ -673,7 +698,7 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
         setLayout({ width, height });
       }}
     >
-      {isReady && imageUri ? (
+      {imageUri ? (
         <ZoomableImage
           key={imageKey}
           source={{ uri: imageUri }}
@@ -688,7 +713,10 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
           containerHeight={layout.height}
         />
       ) : (
-        <ActivityIndicator size="large" color="#fff" />
+        <View style={{ justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={{ color: '#fff', marginTop: 10 }}>No image source available</Text>
+        </View>
       )}
     </View>
   );

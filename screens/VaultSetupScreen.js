@@ -21,7 +21,7 @@ import SecurityQuestionDropdown from '../components/SecurityQuestionDropdown';
 
 export default function VaultSetupScreen({ onComplete, onCancel }) {
   const { colors } = useTheme();
-  const { setupVault } = useVault();
+  const { setupVault, unlockVault } = useVault();
   const navigation = useNavigation();
   const { showConfirm, showAlert } = useDialog();
 
@@ -91,6 +91,8 @@ export default function VaultSetupScreen({ onComplete, onCancel }) {
 
     const success = await setupVault(password, questions);
     if (success) {
+      // Automatically unlock the vault after setup
+      unlockVault();
       showAlert('Success', 'Vault setup completed successfully', () => {
         if (onComplete) {
           onComplete();

@@ -13,6 +13,16 @@ import {
   AppState,
   ScrollView,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  useAnimatedProps,
+  withRepeat,
+  withTiming,
+  interpolateColor,
+  Easing,
+  cancelAnimation
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import * as MediaLibrary from 'expo-media-library';
@@ -34,6 +44,8 @@ import { filterVaultMedia, moveMediaToVault } from '../services/mediaService';
 import { moveMediaToAppTrash } from '../services/trashService';
 import { addMediaToFolder } from '../services/folderService';
 import { CATEGORIES, categorizeMedia } from '../services/categorizationService';
+
+const AnimatedIonicons = Animated.createAnimatedComponent(Ionicons);
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
@@ -137,7 +149,7 @@ export default function HomeScreen({ navigation, route }) {
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Dialog Context
-  const { showConfirm, showAlert } = useDialog();
+  const { showConfirm, showAlert, showCustomConfirm } = useDialog();
 
   // Ref to track if we've loaded initial data
   const dataLoadedRef = useRef(false);
@@ -479,67 +491,100 @@ export default function HomeScreen({ navigation, route }) {
   const handleDeleteSelected = useCallback(() => {
     if (selectedItems.size === 0) return;
 
-    showConfirm(
-      selectedItems.size > 1 ? `Delete ${selectedItems.size} items?` : "Delete photo?",
-      "Items will be moved to trash.",
-      async () => {
-        try {
-          const selectedIds = Array.from(selectedItems);
-          const selectedMedia = filteredMedia.filter(item => selectedIds.includes(item.id.toString()));
+    const selectedIds = Array.from(selectedItems);
+    const selectedMedia = filteredMedia.filter(item => selectedIds.includes(item.id.toString()));
+    const title = selectedItems.size > 1 ? `Delete ${selectedItems.size} items?` : "Delete photo?";
 
-          console.log(`Deleting ${selectedMedia.length} items in batch...`);
-
-          const deletedIds = [];
-          const mediaLibraryIds = [];
-
-          // Step 1: Copy all items to trash (no permission needed)
-          for (const item of selectedMedia) {
+    showCustomConfirm(
+      title,
+      "Choose how you want to delete these items.",
+      [
+        {
+          text: 'Trash',
+          style: 'default',
+          onPress: async () => {
             try {
-              // Copy to app trash
-              const result = await moveMediaToAppTrash(item);
-              if (result) {
-                deletedIds.push(item.id.toString());
-                // Collect MediaLibrary IDs for batch delete
-                if (item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_')) {
-                  mediaLibraryIds.push(item.id);
+              setLoading(true);
+              const deletedIds = [];
+              const mediaLibraryIds = [];
+
+              // Step 1: Copy all items to trash
+              for (const item of selectedMedia) {
+                try {
+                  const result = await moveMediaToAppTrash(item);
+                  if (result) {
+                    deletedIds.push(item.id.toString());
+                    if (item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_')) {
+                      mediaLibraryIds.push(item.id);
+                    }
+                  }
+                } catch (trashError) {
+                  console.error('Error copying item to trash:', item.id, trashError);
                 }
               }
-            } catch (trashError) {
-              console.error('Error copying item to trash:', item.id, trashError);
-            }
-          }
 
-          // Step 2: Delete all from MediaLibrary in ONE operation (asks permission once)
-          if (mediaLibraryIds.length > 0) {
-            try {
-              console.log(`Batch deleting ${mediaLibraryIds.length} items from MediaLibrary...`);
-              const { status } = await MediaLibrary.requestPermissionsAsync();
-              if (status === 'granted') {
-                await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
-                console.log("Batch delete successful!");
+              // Step 2: Delete from MediaLibrary
+              if (mediaLibraryIds.length > 0) {
+                const { status } = await MediaLibrary.requestPermissionsAsync();
+                if (status === 'granted') {
+                  await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                }
               }
-            } catch (deleteError) {
-              console.warn('Batch delete failed:', deleteError);
+
+              // Step 3: Update UI
+              if (deletedIds.length > 0) {
+                setMedia(prev => prev.filter(item => !deletedIds.includes(item.id.toString())));
+              }
+
+              exitSelectionMode();
+            } catch (error) {
+              console.error('Error in trash operation:', error);
+              showAlert('Error', 'Failed to move items to trash');
+            } finally {
+              setLoading(false);
             }
           }
+        },
+        {
+          text: 'Permanently delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              const mediaLibraryIds = selectedMedia
+                .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
+                .map(item => item.id);
 
-          // Step 3: Update UI once at the end
-          if (deletedIds.length > 0) {
-            setMedia(prev => prev.filter(item => !deletedIds.includes(item.id.toString())));
-            console.log(`Removed ${deletedIds.length} items from UI`);
+              if (mediaLibraryIds.length > 0) {
+                const { status } = await MediaLibrary.requestPermissionsAsync();
+                if (status === 'granted') {
+                  const success = await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                  if (success) {
+                    setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                  }
+                }
+              } else {
+                // If no media library IDs (e.g. vault items), just remove from UI
+                setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+              }
+
+              exitSelectionMode();
+            } catch (error) {
+              console.error('Error in permanent delete:', error);
+              showAlert('Error', 'Failed to delete items permanently');
+            } finally {
+              setLoading(false);
+            }
           }
-
-          // Exit selection mode
-          exitSelectionMode();
-        } catch (error) {
-          console.error('Error deleting selected items:', error);
-          showAlert('Error', 'Failed to move items to trash');
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+          onPress: () => { }
         }
-      },
-      null,
-      true // Destructive
+      ]
     );
-  }, [selectedItems, filteredMedia, exitSelectionMode, showConfirm, showAlert]);
+  }, [selectedItems, filteredMedia, exitSelectionMode, showCustomConfirm, showAlert]);
 
   const handleAddToVaultConfirm = useCallback(async () => {
     const selectedCount = selectedItems.size;
@@ -835,6 +880,54 @@ export default function HomeScreen({ navigation, route }) {
     return () => clearTimeout(timeoutId);
   }, [searchQuery, isVaultSetup, isVaultUnlocked, verifyPassword, unlockVault, navigation]);
 
+  // --- Rainbow Animation Logic ---
+  const rainbowProgress = useSharedValue(0);
+
+  useEffect(() => {
+    if (isVaultSetup) {
+      // Start animation loop when vault exists (is setup)
+      rainbowProgress.value = withRepeat(
+        withTiming(1, { duration: 3000, easing: Easing.linear }),
+        -1, // Infinite
+        false // Do not reverse, just loop 0->1
+      );
+    } else {
+      // Stop and reset immediately if vault is deleted (not setup)
+      cancelAnimation(rainbowProgress);
+      rainbowProgress.value = 0;
+    }
+  }, [isVaultSetup]);
+
+  const animatedSearchIconProps = useAnimatedProps(() => {
+    // Return default color if vault is not setup
+    if (!isVaultSetup) {
+      return {
+        color: colors.searchPlaceholder,
+      };
+    }
+
+    const rainbowColors = [
+      '#FF0000', // Red
+      '#FF7F00', // Orange
+      '#FFFF00', // Yellow
+      '#00FF00', // Green
+      '#0000FF', // Blue
+      '#4B0082', // Indigo
+      '#9400D3', // Violet
+      '#FF0000', // Back to Red for smooth loop
+    ];
+
+    const color = interpolateColor(
+      rainbowProgress.value,
+      [0, 0.14, 0.28, 0.42, 0.57, 0.71, 0.85, 1],
+      rainbowColors
+    );
+
+    return {
+      color: color,
+    };
+  }, [isVaultSetup, colors]);
+
   const handleMenuPress = () => {
     console.log('Menu button pressed');
     setMenuAnchorPosition({
@@ -1073,8 +1166,16 @@ export default function HomeScreen({ navigation, route }) {
             </View>
           ) : (
             <View style={styles.header}>
-              <View style={[styles.searchBar, { backgroundColor: colors.searchBar }]}>
-                <Ionicons name="search" size={16} color={colors.searchPlaceholder} />
+              {/* Search Bar Container */}
+              <View style={[
+                styles.searchBar,
+                { backgroundColor: colors.searchBar }
+              ]}>
+                <AnimatedIonicons
+                  name="search"
+                  size={16}
+                  animatedProps={animatedSearchIconProps}
+                />
                 <TextInput
                   value={searchQuery}
                   onChangeText={setSearchQuery}
