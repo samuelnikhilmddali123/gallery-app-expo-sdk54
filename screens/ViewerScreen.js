@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, ActivityIndicator, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules } from 'react-native';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video'; // NEW: Import from expo-video
 import { TouchableOpacity as GHTouchableOpacity, Gesture, GestureDetector } from 'react-native-gesture-handler'; // Better touch handling with gestures
@@ -7,7 +7,7 @@ import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av'; /
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
-import { NativeModules } from 'react-native';
+
 import { useTheme } from '../contexts/ThemeContext';
 import { useNavigation, CommonActions, useFocusEffect } from '@react-navigation/native';
 import * as MediaLibrary from 'expo-media-library';
@@ -28,6 +28,45 @@ const isVideoItem = (mediaItem) => {
   return mediaItem?.mediaType === 'video' ||
     mediaItem?.mediaType === MediaLibrary.MediaType.video ||
     (mediaItem?.duration && mediaItem.duration > 0);
+};
+
+// Helper for language names
+const getLanguageName = (code) => {
+  if (!code) return 'Default';
+  const languageMap = {
+    'en': 'English',
+    'es': 'Spanish',
+    'fr': 'French',
+    'de': 'German',
+    'it': 'Italian',
+    'pt': 'Portuguese',
+    'ru': 'Russian',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'zh': 'Chinese',
+    'hi': 'Hindi',
+    'bn': 'Bengali',
+    'te': 'Telugu',
+    'mr': 'Marathi',
+    'ta': 'Tamil',
+    'ur': 'Urdu',
+    'gu': 'Gujarati',
+    'kn': 'Kannada',
+    'ml': 'Malayalam',
+    'pa': 'Punjabi',
+    'ar': 'Arabic',
+    'tr': 'Turkish',
+    'vi': 'Vietnamese',
+    'pl': 'Polish',
+    'uk': 'Ukrainian',
+    'id': 'Indonesian',
+    'ms': 'Malay',
+    'th': 'Thai',
+  };
+
+  // Clean up code (sometimes it might be en-US or en_US)
+  const baseCode = code.split(/[-_]/)[0].toLowerCase();
+  return languageMap[baseCode] || code.toUpperCase();
 };
 
 // --- Video Content Component ---
@@ -85,6 +124,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting }) => {
 };
 
 const CustomVideoControls = ({
+  player,
   isPlaying,
   onPlayPause,
   duration,
@@ -95,6 +135,31 @@ const CustomVideoControls = ({
   isLandscape,
   onIsInteracting
 }) => {
+  const [showSettings, setShowSettings] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [availableAudioTracks, setAvailableAudioTracks] = useState([]);
+  const [currentAudioTrack, setCurrentAudioTrack] = useState(null);
+  const [currentPlaybackRate, setCurrentPlaybackRate] = useState(1.0);
+
+  useEffect(() => {
+    if (!player) return;
+
+    // Initial sync
+    setCurrentPlaybackRate(player.playbackRate || 1.0);
+    setAvailableAudioTracks(player.availableAudioTracks || []);
+    setCurrentAudioTrack(player.audioTrack);
+
+    // Listen for changes
+    const rateSub = player.addListener('playbackRateChange', (e) => {
+      setCurrentPlaybackRate(e.playbackRate);
+    });
+
+    return () => {
+      rateSub.remove();
+    };
+  }, [player]);
+
   const formatTime = (timeInSeconds) => {
     if (!timeInSeconds && timeInSeconds !== 0) return '0:00';
     const minutes = Math.floor(timeInSeconds / 60);
@@ -104,10 +169,141 @@ const CustomVideoControls = ({
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  const speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
+  const handleSpeedSelect = (rate) => {
+    if (player) {
+      player.playbackRate = rate;
+      setCurrentPlaybackRate(rate);
+    }
+    setShowSpeedMenu(false);
+    setShowSettings(false);
+  };
+
+  const handleAudioSelect = (track) => {
+    if (player) {
+      player.audioTrack = track;
+      setCurrentAudioTrack(track);
+    }
+    setShowAudioMenu(false);
+    setShowSettings(false);
+  };
+
   if (!visible) return null;
 
   return (
     <View style={controlStyles.controlsContainer} pointerEvents="box-none">
+      {/* Settings Modal */}
+      <Modal
+        visible={showSettings}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <TouchableOpacity
+          style={controlStyles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowSettings(false)}
+        >
+          <View style={controlStyles.menuContainer}>
+            <Text style={controlStyles.menuTitle}>Video Settings</Text>
+
+            <TouchableOpacity
+              style={controlStyles.menuItem}
+              onPress={() => setShowSpeedMenu(true)}
+            >
+              <View style={controlStyles.menuItemLeft}>
+                <Ionicons name="speedometer-outline" size={20} color="#fff" />
+                <Text style={controlStyles.menuItemText}>Playback Speed</Text>
+              </View>
+              <Text style={controlStyles.menuItemValue}>{currentPlaybackRate}x</Text>
+            </TouchableOpacity>
+
+            {availableAudioTracks.length > 1 && (
+              <TouchableOpacity
+                style={controlStyles.menuItem}
+                onPress={() => setShowAudioMenu(true)}
+              >
+                <View style={controlStyles.menuItemLeft}>
+                  <Ionicons name="language-outline" size={20} color="#fff" />
+                  <Text style={controlStyles.menuItemText}>Audio Track</Text>
+                </View>
+                <Text style={controlStyles.menuItemValue}>
+                  {getLanguageName(currentAudioTrack?.language)}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={controlStyles.closeButton}
+              onPress={() => setShowSettings(false)}
+            >
+              <Text style={controlStyles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Speed Selection Modal */}
+      <Modal
+        visible={showSpeedMenu}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowSpeedMenu(false)}
+      >
+        <TouchableOpacity
+          style={controlStyles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowSpeedMenu(false)}
+        >
+          <View style={controlStyles.menuContainer}>
+            <Text style={controlStyles.menuTitle}>Playback Speed</Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              {speedOptions.map(rate => (
+                <TouchableOpacity
+                  key={rate}
+                  style={[controlStyles.menuItem, currentPlaybackRate === rate && controlStyles.menuItemSelected]}
+                  onPress={() => handleSpeedSelect(rate)}
+                >
+                  <Text style={controlStyles.menuItemText}>{rate === 1.0 ? 'Normal' : `${rate}x`}</Text>
+                  {currentPlaybackRate === rate && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Audio Selection Modal */}
+      <Modal
+        visible={showAudioMenu}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowAudioMenu(false)}
+      >
+        <TouchableOpacity
+          style={controlStyles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowAudioMenu(false)}
+        >
+          <View style={controlStyles.menuContainer}>
+            <Text style={controlStyles.menuTitle}>Audio Tracks</Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              {availableAudioTracks.map((track, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[controlStyles.menuItem, currentAudioTrack === track && controlStyles.menuItemSelected]}
+                  onPress={() => handleAudioSelect(track)}
+                >
+                  <Text style={controlStyles.menuItemText}>{getLanguageName(track.language)}</Text>
+                  {currentAudioTrack === track && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Bottom bar container - consumes taps to prevent toggling controls when tapping near buttons */}
       <TouchableOpacity
         activeOpacity={1}
@@ -132,9 +328,15 @@ const CustomVideoControls = ({
           onIsInteracting={onIsInteracting}
         />
 
-        <TouchableOpacity onPress={onToggleFullscreen} style={controlStyles.smallControlBtn}>
-          <Ionicons name={isLandscape ? "contract-outline" : "scan-outline"} size={24} color="white" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <TouchableOpacity onPress={() => setShowSettings(true)} style={controlStyles.smallControlBtn}>
+            <Ionicons name="settings-outline" size={22} color="white" />
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={onToggleFullscreen} style={controlStyles.smallControlBtn}>
+            <Ionicons name={isLandscape ? "contract-outline" : "scan-outline"} size={24} color="white" />
+          </TouchableOpacity>
+        </View>
       </TouchableOpacity>
     </View>
   );
@@ -148,6 +350,16 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false); // Track if user has interacted with video
   const [isInteracting, setIsInteracting] = useState(false); // Track if user is seeking/dragging
+  const { showAlert } = useDialog();
+
+  // Player Hook - Only init when valid URI exists
+  const player = useVideoPlayer(videoUri, (player) => {
+    if (videoUri) {
+      player.loop = true;
+      player.muted = false;
+      player.timeUpdateEventInterval = 0.1;
+    }
+  });
 
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
@@ -282,14 +494,6 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     return () => { isMounted = false; };
   }, [mediaItem.id, videoStates]);
 
-  // Player Hook - Only init when valid URI exists
-  const player = useVideoPlayer(videoUri, (player) => {
-    if (videoUri) {
-      player.loop = true;
-      player.muted = false;
-      player.timeUpdateEventInterval = 0.1;
-    }
-  });
 
   // Event Listeners for Custom Controls & Restoration
   useEffect(() => {
@@ -529,9 +733,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   // 2. Loading state (strictly gated)
   if (!isReady || !videoUri) {
     return (
-      <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#fff" />
-      </View>
+      <View style={{ width: dimensions.width, height: dimensions.height, backgroundColor: '#000' }} />
     );
   }
 
@@ -609,6 +811,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           {/* Bottom Controls Layer */}
           {/* Video Bottom Controls */}
           <CustomVideoControls
+            player={player}
             isPlaying={isPlaying}
             onPlayPause={togglePlay}
             duration={duration}
@@ -745,6 +948,8 @@ const MediaItem = React.memo(({ mediaItem, index, isActive, onZoomChange, onTogg
     prev.dimensions.width === next.dimensions.width &&
     prev.dimensions.height === next.dimensions.height;
 });
+
+MediaItem.displayName = 'MediaItem';
 
 // --- Main Screen ---
 export default function ViewerScreen({ route, navigation: navProp }) {
@@ -1013,10 +1218,6 @@ export default function ViewerScreen({ route, navigation: navProp }) {
     }
   }).current;
 
-  if (!currentItem && mediaItems.length === 0) return null;
-
-  const isPhoto = currentItem && !isVideoItem(currentItem);
-
   // Use dynamic dimensions for proper orientation handling
   const { width: screenWidth, height: screenHeight } = dimensions;
   const styles = useMemo(() => getStyles(screenWidth, screenHeight), [screenWidth, screenHeight]);
@@ -1024,6 +1225,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const flatListStyle = useAnimatedStyle(() => ({
     opacity: rotationOpacity.value,
   }));
+
+  if (!currentItem && mediaItems.length === 0) return null;
+  const isPhoto = currentItem && !isVideoItem(currentItem);
 
   return (
     <GestureDetector gesture={verticalSwipeGesture}>
@@ -1151,5 +1355,60 @@ const controlStyles = StyleSheet.create({
   progressBarFill: {
     height: '100%',
     backgroundColor: '#fff',
-  }
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuContainer: {
+    width: '80%',
+    backgroundColor: '#1c1c1e',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  menuTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  menuItemSelected: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+  },
+  menuItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  menuItemText: {
+    color: '#fff',
+    fontSize: 16,
+  },
+  menuItemValue: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 14,
+  },
+  closeButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  closeButtonText: {
+    color: '#007AFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { StyleSheet, Dimensions, View, ActivityIndicator, Text } from 'react-native';
+import { StyleSheet, Dimensions, View, Text } from 'react-native';
 import { Image } from 'expo-image';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -99,7 +99,7 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
       setIntrinsicDims(null);
     }
     setHasError(false);
-  }, [recyclingKey, intrinsicWidth, intrinsicHeight]);
+  }, [recyclingKey, intrinsicWidth, intrinsicHeight, imageWidth, imageHeight, resetZoom]);
 
   // Update container dimensions when props change (for orientation changes)
   useEffect(() => {
@@ -109,7 +109,7 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
     if (propContainerHeight) {
       containerHeight.value = propContainerHeight;
     }
-  }, [propContainerWidth, propContainerHeight]);
+  }, [propContainerWidth, propContainerHeight, containerWidth, containerHeight]);
 
   const clamp = (value, lower, upper) => {
     'worklet';
@@ -354,11 +354,7 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
         </View>
       </GestureDetector>
       {!intrinsicDims && !hasError && (
-        <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
-          <View style={styles.center}>
-            <ActivityIndicator size="small" color="white" />
-          </View>
-        </View>
+        <View style={StyleSheet.absoluteFillObject} pointerEvents="none" />
       )}
     </View>
   );
