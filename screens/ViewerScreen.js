@@ -918,6 +918,8 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
         onPress={onToggleUI}
         containerWidth={layout.width}
         containerHeight={layout.height}
+        intrinsicWidth={mediaItem.width}
+        intrinsicHeight={mediaItem.height}
       />
     </View>
   );

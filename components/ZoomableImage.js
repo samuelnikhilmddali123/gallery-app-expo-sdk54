@@ -34,14 +34,14 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
   const containerWidth = useSharedValue(propContainerWidth || SCREEN_WIDTH);
   const containerHeight = useSharedValue(propContainerHeight || SCREEN_HEIGHT);
 
-  const initialW = intrinsicWidth || SCREEN_WIDTH;
-  const initialH = intrinsicHeight || SCREEN_HEIGHT;
+  const initialW = intrinsicWidth || 0;
+  const initialH = intrinsicHeight || 0;
 
   const imageWidth = useSharedValue(initialW);
   const imageHeight = useSharedValue(initialH);
 
   const [intrinsicDims, setIntrinsicDims] = useState(
-    (intrinsicWidth && intrinsicHeight) ? { width: initialW, height: initialH } : null
+    (intrinsicWidth && intrinsicHeight) ? { width: intrinsicWidth, height: intrinsicHeight } : null
   );
 
   const [hasError, setHasError] = useState(false);
@@ -94,8 +94,8 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
         return { width: intrinsicWidth, height: intrinsicHeight };
       });
     } else {
-      imageWidth.value = SCREEN_WIDTH;
-      imageHeight.value = SCREEN_HEIGHT;
+      imageWidth.value = 0;
+      imageHeight.value = 0;
       setIntrinsicDims(null);
     }
     setHasError(false);
@@ -123,9 +123,14 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
     const imgW = imageWidth.value;
     const imgH = imageHeight.value;
 
+    if (imgW === 0 || imgH === 0) {
+      return { displayedWidth: containerW, displayedHeight: containerH };
+    }
+
     const wRatio = containerW / imgW;
     const hRatio = containerH / imgH;
-    const scaleFactor = Math.min(wRatio, hRatio);
+    // Scale factor to FIT the image, but cap at 1.0 to avoid stretching small images
+    const scaleFactor = Math.min(1, Math.min(wRatio, hRatio));
 
     return {
       displayedWidth: imgW * scaleFactor,
@@ -298,9 +303,12 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
   const finalGesture = Gesture.Simultaneous(exclusiveSingleTap, pinchGesture, panGesture);
 
   const animatedStyle = useAnimatedStyle(() => {
+    // Calculate actual displayed image dimensions (aspect ratio fit)
+    const { displayedWidth, displayedHeight } = getDisplayedDimensions();
+
     return {
-      width: '100%',
-      height: '100%',
+      width: displayedWidth,
+      height: displayedHeight,
       transform: [
         { translateX: translateX.value },
         { translateY: translateY.value },
@@ -332,7 +340,7 @@ function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, in
             <Image
               source={source}
               style={{ width: '100%', height: '100%' }}
-              contentFit="contain"
+              contentFit={contentFit}
               transition={0}
               cachePolicy="memory-disk"
               priority="high"
