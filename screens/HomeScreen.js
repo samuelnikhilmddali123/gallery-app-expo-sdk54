@@ -37,13 +37,10 @@ import { useDialog } from '../contexts/DialogContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
 import { useSearch } from '../contexts/SearchContext';
-import { getFolders } from '../services/folderService';
-import { Image as ExpoImage } from 'expo-image';
-import { removeMediaFromVault } from '../services/vaultService';
-import { filterVaultMedia, moveMediaToVault } from '../services/mediaService';
-import { moveMediaToAppTrash } from '../services/trashService';
-import { addMediaToFolder } from '../services/folderService';
+import { getFolders, addMediaToFolder } from '../services/folderService';
 import { CATEGORIES, categorizeMedia } from '../services/categorizationService';
+import { filterVaultMedia, moveMediaToVault, saveMediaCache, loadMediaCache } from '../services/mediaService';
+import { moveMediaToAppTrash } from '../services/trashService';
 
 const AnimatedIonicons = Animated.createAnimatedComponent(Ionicons);
 
@@ -143,6 +140,7 @@ export default function HomeScreen({ navigation, route }) {
   const [targetFolderName, setTargetFolderName] = useState(null);
   const [categorizedMedia, setCategorizedMedia] = useState({});
   const [isCategorizing, setIsCategorizing] = useState(false);
+  const [isFirstLaunch, setIsFirstLaunch] = useState(false);
 
   // Pagination & Loading
   const [pageInfo, setPageInfo] = useState({ hasNextPage: true, endCursor: undefined });
@@ -154,30 +152,38 @@ export default function HomeScreen({ navigation, route }) {
   // Ref to track if we've loaded initial data
   const dataLoadedRef = useRef(false);
 
-  // Load all data (Media, Albums, Folders)
+  // Load All System Data (Albums, Folders)
   const loadAllData = useCallback(async () => {
     try {
-      if (!dataLoadedRef.current) setLoading(true);
-
-      const [mediaResult, albumsResult, foldersResult] = await Promise.all([
-        getAllMedia(),
+      // Fetch albums and folders
+      const [albumsResult, foldersResult] = await Promise.all([
         MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true }),
         getFolders()
       ]);
 
-      setMedia(mediaResult);
       setAlbums(albumsResult);
       setFolders(foldersResult);
-
-      dataLoadedRef.current = true;
-
-      // Start categorization in background
-      startCategorization(mediaResult);
     } catch (error) {
-      console.error('Error loading data:', error);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+      console.error('Error loading albums/folders:', error);
+    }
+  }, []);
+
+  // Initialize from cache
+  const initFromCache = useCallback(async () => {
+    try {
+      const cachedMedia = await loadMediaCache();
+      if (cachedMedia && cachedMedia.length > 0) {
+        console.log(`HomeScreen: Loaded ${cachedMedia.length} items from cache`);
+        setMedia(cachedMedia);
+        dataLoadedRef.current = true;
+        // Start categorization for cached items too
+        startCategorization(cachedMedia);
+      } else {
+        console.log("HomeScreen: No cache found, marking as first launch");
+        setIsFirstLaunch(true);
+      }
+    } catch (error) {
+      console.error('Error initializing cache:', error);
     }
   }, []);
 
@@ -766,6 +772,7 @@ export default function HomeScreen({ navigation, route }) {
       // ⚡ PERFORMANCE: Filter vault items before merging to save operations
       const filteredNewMedia = await filterVaultMedia(normalizedAssets);
 
+      let finalMedia = [];
       setMedia(prev => {
         const merged = reset ? filteredNewMedia : [...prev, ...filteredNewMedia];
 
@@ -777,19 +784,20 @@ export default function HomeScreen({ navigation, route }) {
         });
         const uniqueItems = Array.from(uniqueItemsMap.values());
 
-        return uniqueItems.sort((a, b) => {
-          // Prefer creationTime, then modificationTime, then 0
-          // This ensures that newly cropped photos (with 0 creationTime)
-          // bubble to the top if their modificationTime is current.
+        finalMedia = uniqueItems.sort((a, b) => {
           const timeA = a.creationTime || a.modificationTime || 0;
           const timeB = b.creationTime || b.modificationTime || 0;
-
           if (timeB !== timeA) return timeB - timeA;
-
-          // Secondary fallback for safety
           return (b.id?.toString() || '').localeCompare(a.id?.toString() || '');
         });
+
+        return finalMedia;
       });
+
+      // Save to cache after successful fetch (only for top items/initial batch)
+      if (reset || !currentCursor) {
+        saveMediaCache(finalMedia);
+      }
 
     } catch (error) {
       console.error('Error loading gallery:', error);
@@ -819,8 +827,21 @@ export default function HomeScreen({ navigation, route }) {
     if (route?.params?.selectionPurpose === 'vaultAdd') {
       return;
     }
-    // Load gallery on mount - show loader only on first load
-    loadGallery(true);
+
+    // Google Gallery Behavior:
+    // 1. Load from cache immediately (no loader)
+    // 2. Then sync with MediaLibrary in background (silent sync)
+    // 3. Only show loader if it's truly the first launch and no data exists
+
+    const initialize = async () => {
+      await initFromCache();
+
+      // If we have items from cache, don't show the full-screen loader during sync
+      const hasCache = dataLoadedRef.current;
+      loadGallery(!hasCache);
+    };
+
+    initialize();
   }, []);
 
   // MediaLibrary listener disabled - causes slow reloads after deletion
@@ -828,13 +849,13 @@ export default function HomeScreen({ navigation, route }) {
   /*
   useEffect(() => {
     console.log("HomeScreen: Setting up MediaLibrary listener...");
-  
+   
     const subscription = MediaLibrary.addListener(() => {
       console.log("HomeScreen: MediaLibrary changed! Auto-refreshing...");
       // Refresh gallery when new photos are added
       loadGallery(false, true); // reset = true to get latest photos
     });
-  
+   
     return () => {
       console.log("HomeScreen: Removing MediaLibrary listener");
       subscription.remove();
@@ -960,11 +981,17 @@ export default function HomeScreen({ navigation, route }) {
 
 
 
-  if (loading) {
+  // Show full-screen loader ONLY if it's the first launch AND we have no data yet
+  if (loading && media.length === 0) {
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
         <View style={styles.loader}>
           <ActivityIndicator size="large" color={colors.icon} />
+          {isFirstLaunch && (
+            <Text style={{ marginTop: 16, color: colors.text, opacity: 0.7 }}>
+              Building your gallery...
+            </Text>
+          )}
         </View>
       </SafeAreaView>
     );

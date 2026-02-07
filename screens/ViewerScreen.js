@@ -556,6 +556,9 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
     const playSub = player.addListener('playingChange', (e) => {
       setIsPlaying(e.isPlaying);
+      if (e.isPlaying) {
+        setHasInteracted(true);
+      }
       if (videoStates?.current?.[mediaItem.id]) {
         videoStates.current[mediaItem.id].isPlaying = e.isPlaying;
         videoStates.current[mediaItem.id].timestamp = Date.now();

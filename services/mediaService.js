@@ -1,6 +1,9 @@
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addMediaToVault } from './vaultService';
+
+const MEDIA_CACHE_KEY = 'media_gallery_cache';
 
 export const moveMediaToVault = async (mediaItem, shouldDelete = true) => {
   try {
@@ -112,4 +115,41 @@ export const moveToSystemTrash = async (asset) => {
     console.log('Trash failed:', e);
     return false;
   }
+};
+
+// Cache essential media metadata for instant loading
+export const saveMediaCache = async (mediaList) => {
+  try {
+    if (!mediaList || mediaList.length === 0) return;
+
+    // Only cache top 2000 items to keep storage usage low and loading fast
+    // Metadata includes: id, uri, width, height, creationTime, mediaType, duration
+    const simplifiedList = mediaList.slice(0, 2000).map(item => ({
+      id: item.id,
+      uri: item.uri,
+      width: item.width,
+      height: item.height,
+      creationTime: item.creationTime,
+      modificationTime: item.modificationTime,
+      mediaType: item.mediaType,
+      duration: item.duration,
+      filename: item.filename
+    }));
+
+    await AsyncStorage.setItem(MEDIA_CACHE_KEY, JSON.stringify(simplifiedList));
+  } catch (error) {
+    console.error('Error saving media cache:', error);
+  }
+};
+
+export const loadMediaCache = async () => {
+  try {
+    const cachedData = await AsyncStorage.getItem(MEDIA_CACHE_KEY);
+    if (cachedData) {
+      return JSON.parse(cachedData);
+    }
+  } catch (error) {
+    console.error('Error loading media cache:', error);
+  }
+  return [];
 };
