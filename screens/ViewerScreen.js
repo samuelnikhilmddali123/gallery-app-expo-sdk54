@@ -345,11 +345,12 @@ const CustomVideoControls = ({
 // --- Video Content Component ---
 const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
   const [videoUri, setVideoUri] = useState(null);
-  const [isReady, setIsReady] = useState(false); // NEW: Gate rendering
-  const [loadError, setLoadError] = useState(false); // NEW: Track errors
+  const [isReady, setIsReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [hasInteracted, setHasInteracted] = useState(false); // Track if user has interacted with video
-  const [isInteracting, setIsInteracting] = useState(false); // Track if user is seeking/dragging
+  const [hasInteracted, setHasInteracted] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const [shouldShowVideo, setShouldShowVideo] = useState(false); // NEW: Controls VideoView mounting
   const { showAlert } = useDialog();
 
   // Player Hook - Initialize with NULL to prevent native auto-prepare
@@ -718,13 +719,13 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     if (!player || !videoUri) return;
 
     try {
-      // PLAY-TO-PREPARE: If player is idle/not ready, trigger preparation first
-      if (player.status === 'idle') {
-        console.log('VideoContent: Triggering delayed preparation for', videoUri);
+      // PHASE 2: MOUNT VIDEO ON PLAY
+      if (!shouldShowVideo) {
+        console.log('VideoContent: Mounting VideoView and starting preparation');
+        setShouldShowVideo(true);
         setHasInteracted(true);
         player.replace(videoUri);
-        // Note: Playback will start automatically if we call play() after replace, 
-        // but replace() handles preparation.
+        player.play();
         return;
       }
 
@@ -848,10 +849,10 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   }
 
   return (
-    <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
-      {/* Background Video Layer */}
+    <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
+      {/* Background Video Layer - ONLY MOUNTED AFTER USER INTERACTION */}
       <View style={videoBoxStyle} pointerEvents="box-none">
-        {player && (
+        {shouldShowVideo && player && (
           <VideoView
             ref={videoRef}
             player={player}
@@ -862,6 +863,18 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
             contentFit="contain"
             // Use TextureView on Android to improve stability with high‑fps HEVC and VFR content.
             surfaceType="textureView"
+          />
+        )}
+
+        {/* PHASE 2: STATIC THUMBNAIL OVERLAY (Shown until video is mounted) */}
+        {!shouldShowVideo && (
+          <ImageContent
+            mediaItem={mediaItem}
+            isActive={isActive}
+            onZoomChange={() => { }}
+            onToggleUI={onToggleUI}
+            refreshKey={mediaItem.id}
+            dimensions={dimensions}
           />
         )}
       </View>
@@ -1043,12 +1056,20 @@ const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange
   const isVideo = isVideoItem(mediaItem);
 
   if (isVideo) {
-    // AGGRESSIVE RESOURCE MANAGEMENT:
-    // Only render video player if it is active or an immediate neighbor.
-    // This prevents memory exhaustion from multiple high-bitrate players.
-    if (!isNear && !isActive) {
+    // PHASE 2 AGGRESSIVE RESOURCE MANAGEMENT:
+    // ONLY render VideoContent for the active item.
+    // Neighbors (isNear && !isActive) ONLY show a static thumbnail.
+    // This ensures strictly ONE VideoPlayer/VideoView exists at any time.
+    if (!isActive) {
       return (
-        <View style={{ width: dimensions.width, height: dimensions.height, backgroundColor: '#000' }} />
+        <ImageContent
+          mediaItem={mediaItem}
+          isActive={false}
+          onZoomChange={() => { }}
+          onToggleUI={onToggleUI}
+          refreshKey={refreshKey}
+          dimensions={dimensions}
+        />
       );
     }
 
