@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { useVideoPlayer, VideoView } from 'expo-video'; // NEW: Import from expo-video
 import { TouchableOpacity as GHTouchableOpacity, Gesture, GestureDetector } from 'react-native-gesture-handler'; // Better touch handling with gestures
-import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av'; // Keep Audio for focus management if needed
+// import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av'; // Removed to avoid potential conflicts
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
@@ -352,14 +352,57 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const [isInteracting, setIsInteracting] = useState(false); // Track if user is seeking/dragging
   const { showAlert } = useDialog();
 
-  // Player Hook - Only init when valid URI exists
-  const player = useVideoPlayer(videoUri, (player) => {
-    if (videoUri) {
+  // Player Hook - Initialize with NULL to prevent native auto-prepare
+  // We will manually call player.replace(videoUri) when user taps Play
+  const player = useVideoPlayer(null);
+
+  // Custom Control State
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [videoDims, setVideoDims] = useState({
+    width: mediaItem.width || 0,
+    height: mediaItem.height || 0
+  });
+
+  // Apply player settings in a stable effect
+  useEffect(() => {
+    if (player && videoUri) {
       player.loop = true;
       player.muted = false;
-      player.timeUpdateEventInterval = 0.1;
+      player.timeUpdateEventInterval = 0.5; // DEEP STABILITY: Reduce bridge traffic (100ms -> 500ms)
+
+      // Configure buffering optimized for 4K and high-resolution video playback.
+      // Increased buffer sizes help handle high-bitrate 4K content without stuttering.
+      try {
+        // Detect if video is 4K (3840x2160) or higher resolution
+        // Use videoDims if available, otherwise fall back to mediaItem dimensions
+        const width = videoDims.width || mediaItem.width || 0;
+        const height = videoDims.height || mediaItem.height || 0;
+        const is4K = width >= 3840 || height >= 2160;
+
+        if (is4K) {
+          // 4K video: Use larger buffers for high-bitrate content
+          player.bufferOptions = {
+            // All values in milliseconds, mirroring ExoPlayer DefaultLoadControl style.
+            minBufferMs: 20000,        // 20s minimum buffer (was 3s)
+            maxBufferMs: 50000,        // 50s maximum buffer (was 10s)
+            bufferForPlaybackMs: 5000, // 5s before starting playback (was 1.5s)
+            bufferForPlaybackAfterRebufferMs: 5000, // 5s after rebuffering (was 2s)
+          };
+        } else {
+          // HD and lower: Use moderate buffers
+          player.bufferOptions = {
+            minBufferMs: 10000,        // 10s minimum buffer
+            maxBufferMs: 30000,        // 30s maximum buffer
+            bufferForPlaybackMs: 3000, // 3s before starting playback
+            bufferForPlaybackAfterRebufferMs: 3000, // 3s after rebuffering
+          };
+        }
+      } catch (e) {
+        console.warn('VideoContent: Failed to set bufferOptions', e);
+      }
     }
-  });
+  }, [player, videoUri, videoDims, mediaItem.width, mediaItem.height]);
 
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
@@ -378,19 +421,35 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     };
   }, [mediaItem.id]); // Reset when ID changes
 
-  // Cleanup video on screen exit
+  // Cleanup video on screen exit and handle AppState
   useFocusEffect(
     useCallback(() => {
+      const handleAppStateChange = (nextAppState) => {
+        if (nextAppState.match(/inactive|background/)) {
+          console.log('VideoContent: App backgrounded, pausing player');
+          try {
+            if (player && player.status === 'readyToPlay') {
+              player.pause();
+            }
+          } catch (e) {
+            console.log('VideoContent: Pause on background failed', e.message);
+          }
+        }
+      };
+
+      const subscription = AppState.addEventListener('change', handleAppStateChange);
+
       return () => {
+        subscription.remove();
+        console.log('VideoContent: Cleaning up player resources on blur');
         try {
-          if (player && player.status === 'readyToPlay') {
-            // Check if player is still valid (not released)
-            // Expo Modules shared objects throw when used after release
+          if (player) {
             player.pause();
+            // Optional: If we want to be extremely aggressive with "Release immediately in onPause":
+            // player.release(); // This would require re-initialization on focus
           }
         } catch (e) {
-          // If player is already released, this will catch the native error
-          console.log('ViewerScreen: Player already released or failed to pause', e.message);
+          console.log('VideoContent: Player cleanup error', e.message);
         }
         if (videoRef.current) {
           videoRef.current = null;
@@ -398,14 +457,6 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
       };
     }, [player])
   );
-
-  // Custom Control State
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [videoDims, setVideoDims] = useState({
-    width: mediaItem.width || 0,
-    height: mediaItem.height || 0
-  });
 
   // Resolve Video URI
   useEffect(() => {
@@ -433,39 +484,56 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     const loadUri = async () => {
       try {
         let uri = null;
+        // 1. Direct path check for camera videos and vault items
         const isVault = mediaItem.id && mediaItem.id.toString().startsWith('vault_');
         const isTrash = mediaItem.isTrash || mediaItem.isAppTrash;
+        let initialUri;
 
-        // 1. Prioritize direct paths for Vault and Trash items
-        if ((isVault || isTrash) && (mediaItem.filePath || mediaItem.uri || mediaItem.localUri)) {
-          uri = mediaItem.filePath || mediaItem.uri || mediaItem.localUri;
+        if (isVault || isTrash) {
+          // For vault/trash (app‑managed files), direct file paths are expected.
+          initialUri = mediaItem.filePath || mediaItem.localUri || mediaItem.uri;
+        } else if (Platform.OS === 'android') {
+          // On Android we strongly prefer content:// URIs from MediaStore to avoid
+          // scoped‑storage violations and brittle file‑path access.
+          initialUri = mediaItem.uri || mediaItem.localUri || mediaItem.filePath;
+        } else {
+          // iOS and others: preserve previous priority.
+          initialUri = mediaItem.filePath || mediaItem.localUri || mediaItem.uri;
         }
-        // 2. Otherwise try MediaLibrary for regular assets
+
+        if (initialUri && (isVault || isTrash)) {
+          // For app‑private vault/trash items, keep using the direct file path.
+          uri = initialUri;
+        }
+        // 2. Try MediaLibrary for regular gallery assets – this gives us stable content:// URIs on Android.
         else if (mediaItem.id && !mediaItem.id.toString().startsWith('picked_') && !mediaItem.id.toString().startsWith('temp_')) {
           const { status } = await MediaLibrary.requestPermissionsAsync();
           if (status === 'granted') {
             try {
               const asset = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
               if (asset) {
-                uri = asset.localUri || asset.uri;
+                if (Platform.OS === 'android') {
+                  // Prefer the scoped‑storage content:// URI on Android.
+                  uri = asset.uri || asset.localUri || initialUri;
+                } else {
+                  uri = asset.localUri || asset.uri || initialUri;
+                }
                 if (asset.width && asset.height) {
                   setVideoDims({ width: asset.width, height: asset.height });
                 }
               } else {
-                // Asset not found in media library (might be in system trash or recently moved)
-                uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
+                uri = initialUri;
               }
             } catch (err) {
-              console.warn("VideoContent: getAssetInfoAsync failed", err);
-              uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
+              uri = initialUri;
             }
           } else {
-            uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
+            uri = initialUri;
           }
         }
-        // 3. Last resort fallback
+        // 3. Fallback
         else {
-          uri = mediaItem.localUri || mediaItem.filePath || mediaItem.uri;
+          uri = initialUri;
         }
 
         if (isMounted) {
@@ -545,12 +613,37 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         setIsPlaying(false);
       }
     });
-
     const statusSub = player.addListener('statusChange', (s) => {
+      console.log(`VideoContent: Player status changed to ${s.status}`);
+
       if (s.status === 'readyToPlay') {
-        console.log(`VideoContent: Status readyToPlay - restoring state`);
         setDuration(player.duration); // Update duration
         restoreState();
+      }
+
+      // If the native decoder/ExoPlayer reports an error, fail gracefully instead of crashing.
+      if (s.status === 'error') {
+        const errorDetail = s.error?.message || s.error?.code || 'Unknown error';
+        console.error('VideoContent: Player status error', errorDetail);
+
+        try {
+          // Best‑effort pause/stop; if the player is already torn down this may throw.
+          if (player.playing) {
+            player.pause();
+          }
+        } catch (err) {
+          console.warn('VideoContent: Failed to pause after error', err);
+        }
+
+        // Show a friendly error state instead of letting the app terminate.
+        setLoadError(true);
+
+        // Surface a user‑visible alert with specific decoder info if possible
+        showAlert?.(
+          'Playback error',
+          'This video format, frame rate, or resolution is not fully supported by your device\'s hardware decoder. ' +
+          'Error: ' + errorDetail
+        );
       }
     });
 
@@ -585,11 +678,13 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         // the last known good position within 5s of mount, ignore it.
         // This stops movies from restarting because of native buffering/orientation events.
         if (prevState && prevState.currentTime > 0.5) {
-          if (e.currentTime < prevState.currentTime - 0.5 && Date.now() - prevState.timestamp < 5000) {
+          if (e.currentTime < prevState.currentTime - 0.5 && Date.now() - prevState.timestamp < 3000) {
             return;
           }
         }
 
+        // Only save if it's a significant enough update or after a delay
+        // (Handled by timeUpdateEventInterval mostly, but extra safety here)
         videoStates.current[mediaItem.id] = {
           ...prevState,
           currentTime: e.currentTime,
@@ -620,9 +715,21 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   }, [isActive, player, isPlaying]);
 
   const togglePlay = () => {
-    if (!player || player.status !== 'readyToPlay') return;
+    if (!player || !videoUri) return;
 
     try {
+      // PLAY-TO-PREPARE: If player is idle/not ready, trigger preparation first
+      if (player.status === 'idle') {
+        console.log('VideoContent: Triggering delayed preparation for', videoUri);
+        setHasInteracted(true);
+        player.replace(videoUri);
+        // Note: Playback will start automatically if we call play() after replace, 
+        // but replace() handles preparation.
+        return;
+      }
+
+      if (player.status !== 'readyToPlay') return;
+
       // Check if video is finished using player's native state
       const isFinished = player.playbackState === 'finished';
 
@@ -642,7 +749,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         }
       }
     } catch (e) {
-      console.error('ViewerScreen: Error toggling play', e);
+      console.error('VideoContent: Error toggling play', e);
     }
   };
 
@@ -753,6 +860,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
             allowsFullscreen={false} // We handle rotation manually
             requiresLinearPlayback={false}
             contentFit="contain"
+            // Use TextureView on Android to improve stability with high‑fps HEVC and VFR content.
+            surfaceType="textureView"
           />
         )}
       </View>
@@ -930,25 +1039,46 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
 
 
 // --- Media Item Wrapper ---
-const MediaItem = React.memo(({ mediaItem, index, isActive, onZoomChange, onToggleUI, refreshKey, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
+const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange, onToggleUI, refreshKey, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
   const isVideo = isVideoItem(mediaItem);
 
   if (isVideo) {
-    return <VideoContent
+    // AGGRESSIVE RESOURCE MANAGEMENT:
+    // Only render video player if it is active or an immediate neighbor.
+    // This prevents memory exhaustion from multiple high-bitrate players.
+    if (!isNear && !isActive) {
+      return (
+        <View style={{ width: dimensions.width, height: dimensions.height, backgroundColor: '#000' }} />
+      );
+    }
+
+    return (
+      <VideoContent
+        mediaItem={mediaItem}
+        isActive={isActive}
+        onToggleUI={onToggleUI}
+        videoStates={videoStates}
+        dimensions={dimensions}
+        controlsVisible={controlsVisible}
+        controlsOpacity={controlsOpacity}
+      />
+    );
+  }
+
+  return (
+    <ImageContent
       mediaItem={mediaItem}
       isActive={isActive}
+      onZoomChange={onZoomChange}
       onToggleUI={onToggleUI}
-      videoStates={videoStates}
+      refreshKey={refreshKey}
       dimensions={dimensions}
-      controlsVisible={controlsVisible}
-      controlsOpacity={controlsOpacity}
-    />;
-  } else {
-    return <ImageContent mediaItem={mediaItem} isActive={isActive} onZoomChange={onZoomChange} onToggleUI={onToggleUI} refreshKey={refreshKey} dimensions={dimensions} />;
-  }
+    />
+  );
 }, (prev, next) => {
-  return prev.isActive === next.isActive &&
-    prev.mediaItem.id === next.mediaItem.id &&
+  return prev.mediaItem.id === next.mediaItem.id &&
+    prev.isActive === next.isActive &&
+    prev.isNear === next.isNear && // Important for memory gating
     prev.refreshKey === next.refreshKey &&
     prev.dimensions.width === next.dimensions.width &&
     prev.dimensions.height === next.dimensions.height;
@@ -1058,7 +1188,8 @@ export default function ViewerScreen({ route, navigation: navProp }) {
     };
   }, []); // Remove currentIndex dependency, use ref instead
 
-  // Configure Audio for Video
+  // Configure Audio for Video - Removed conflict with expo-video
+  /*
   useEffect(() => {
     // We set this once to allow playback in silence mode
     Audio.setAudioModeAsync({
@@ -1067,6 +1198,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
       shouldDuckAndroid: true
     }).catch(e => console.warn("Audio mode error", e));
   }, []);
+  */
 
   useEffect(() => {
     StatusBar.setHidden(true, 'fade');
@@ -1193,12 +1325,16 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   };
 
   const renderItem = useCallback(({ item, index }) => {
+    // Logic for aggressive memory management
+    const isNear = Math.abs(index - currentIndex) <= 1;
+
     return (
       <MediaItem
-        key={item.id} // Added key to stabilize FlatList items
+        key={item.id}
         mediaItem={item}
         index={index}
         isActive={index === currentIndex}
+        isNear={isNear} // Pass memory gating flag
         onZoomChange={setIsZoomed}
         onToggleUI={toggleControls}
         refreshKey={refreshKey}
@@ -1208,7 +1344,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
         controlsOpacity={controlsOpacity}
       />
     );
-  }, [currentIndex, toggleControls, refreshKey, dimensions, controlsVisible, videoStates, controlsOpacity]); // ✅ Added all dependencies
+  }, [currentIndex, toggleControls, refreshKey, dimensions, controlsVisible, videoStates, controlsOpacity]);
 
   const getItemLayout = useCallback((data, index) => ({
     length: dimensions.width,
