@@ -1,11 +1,10 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform } from 'react-native';
 import { Image } from 'expo-image';
-import { useVideoPlayer, VideoView } from 'expo-video'; // NEW: Import from expo-video
-import { TouchableOpacity as GHTouchableOpacity, Gesture, GestureDetector } from 'react-native-gesture-handler'; // Better touch handling with gestures
-// import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av'; // Removed to avoid potential conflicts
+import { Video, Audio } from 'expo-av'; // Use expo-av for precise seeking control
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Sharing from 'expo-sharing';
 
 import { useTheme } from '../contexts/ThemeContext';
@@ -124,7 +123,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting }) => {
 };
 
 const CustomVideoControls = ({
-  player,
+  videoRef, // Use videoRef for expo-av
   isPlaying,
   onPlayPause,
   duration,
@@ -138,27 +137,28 @@ const CustomVideoControls = ({
   const [showSettings, setShowSettings] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
+  // availableAudioTracks and currentAudioTrack are more complex in expo-av, 
+  // we will disable them for now to ensure stability of the main seeking fix.
   const [availableAudioTracks, setAvailableAudioTracks] = useState([]);
   const [currentAudioTrack, setCurrentAudioTrack] = useState(null);
   const [currentPlaybackRate, setCurrentPlaybackRate] = useState(1.0);
 
   useEffect(() => {
-    if (!player) return;
+    if (!videoRef?.current) return;
 
-    // Initial sync
-    setCurrentPlaybackRate(player.playbackRate || 1.0);
-    setAvailableAudioTracks(player.availableAudioTracks || []);
-    setCurrentAudioTrack(player.audioTrack);
-
-    // Listen for changes
-    const rateSub = player.addListener('playbackRateChange', (e) => {
-      setCurrentPlaybackRate(e.playbackRate);
-    });
-
-    return () => {
-      rateSub.remove();
+    const fetchStatus = async () => {
+      try {
+        const status = await videoRef.current.getStatusAsync();
+        if (status.isLoaded) {
+          setCurrentPlaybackRate(status.rate || 1.0);
+        }
+      } catch (e) {
+        console.warn('CustomVideoControls: Error fetching status', e);
+      }
     };
-  }, [player]);
+
+    fetchStatus();
+  }, [videoRef, visible]); // Re-fetch when visible
 
   const formatTime = (timeInSeconds) => {
     if (!timeInSeconds && timeInSeconds !== 0) return '0:00';
@@ -171,20 +171,21 @@ const CustomVideoControls = ({
 
   const speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-  const handleSpeedSelect = (rate) => {
-    if (player) {
-      player.playbackRate = rate;
-      setCurrentPlaybackRate(rate);
+  const handleSpeedSelect = async (rate) => {
+    if (videoRef?.current) {
+      try {
+        await videoRef.current.setRateAsync(rate, true);
+        setCurrentPlaybackRate(rate);
+      } catch (e) {
+        console.warn('CustomVideoControls: Error setting rate', e);
+      }
     }
     setShowSpeedMenu(false);
     setShowSettings(false);
   };
 
   const handleAudioSelect = (track) => {
-    if (player) {
-      player.audioTrack = track;
-      setCurrentAudioTrack(track);
-    }
+    // expo-av audio track selection is not directly exposed as objects
     setShowAudioMenu(false);
     setShowSettings(false);
   };
@@ -353,9 +354,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const [shouldShowVideo, setShouldShowVideo] = useState(false); // NEW: Controls VideoView mounting
   const { showAlert } = useDialog();
 
-  // Player Hook - Initialize with NULL to prevent native auto-prepare
-  // We will manually call player.replace(videoUri) when user taps Play
-  const player = useVideoPlayer(null);
+  // expo-av Video Reference
+  const videoRef = useRef(null);
 
   // Custom Control State
   const [currentTime, setCurrentTime] = useState(0);
@@ -367,50 +367,28 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
   // Apply player settings in a stable effect
   useEffect(() => {
-    if (player && videoUri) {
-      player.loop = true;
-      player.muted = false;
-      player.timeUpdateEventInterval = 0.5; // DEEP STABILITY: Reduce bridge traffic (100ms -> 500ms)
-
-      // Configure buffering optimized for 4K and high-resolution video playback.
-      // Increased buffer sizes help handle high-bitrate 4K content without stuttering.
+    const setupAudio = async () => {
       try {
-        // Detect if video is 4K (3840x2160) or higher resolution
-        // Use videoDims if available, otherwise fall back to mediaItem dimensions
-        const width = videoDims.width || mediaItem.width || 0;
-        const height = videoDims.height || mediaItem.height || 0;
-        const is4K = width >= 3840 || height >= 2160;
-
-        if (is4K) {
-          // 4K video: Use larger buffers for high-bitrate content
-          player.bufferOptions = {
-            // All values in milliseconds, mirroring ExoPlayer DefaultLoadControl style.
-            minBufferMs: 20000,        // 20s minimum buffer (was 3s)
-            maxBufferMs: 50000,        // 50s maximum buffer (was 10s)
-            bufferForPlaybackMs: 5000, // 5s before starting playback (was 1.5s)
-            bufferForPlaybackAfterRebufferMs: 5000, // 5s after rebuffering (was 2s)
-          };
-        } else {
-          // HD and lower: Use moderate buffers
-          player.bufferOptions = {
-            minBufferMs: 10000,        // 10s minimum buffer
-            maxBufferMs: 30000,        // 30s maximum buffer
-            bufferForPlaybackMs: 3000, // 3s before starting playback
-            bufferForPlaybackAfterRebufferMs: 3000, // 3s after rebuffering
-          };
-        }
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          interruptionModeIOS: 1, // InterruptionModeIOS.DoNotMix
+          shouldDuckAndroid: true,
+          interruptionModeAndroid: 1, // InterruptionModeAndroid.DoNotMix
+          playThroughEarpieceAndroid: false
+        });
       } catch (e) {
-        console.warn('VideoContent: Failed to set bufferOptions', e);
+        console.warn('VideoContent: Failed to set audio mode', e);
       }
-    }
-  }, [player, videoUri, videoDims, mediaItem.width, mediaItem.height]);
+    };
+    setupAudio();
+  }, []);
 
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
   const isRestoringRef = useRef(false);
   const hasRestoredRef = useRef(false);
-  const videoRef = useRef(null);
-
   // Clean up on unmount or ID change
   useEffect(() => {
     return () => {
@@ -429,8 +407,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         if (nextAppState.match(/inactive|background/)) {
           console.log('VideoContent: App backgrounded, pausing player');
           try {
-            if (player && player.status === 'readyToPlay') {
-              player.pause();
+            if (videoRef.current) {
+              videoRef.current.pauseAsync();
             }
           } catch (e) {
             console.log('VideoContent: Pause on background failed', e.message);
@@ -444,19 +422,14 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         subscription.remove();
         console.log('VideoContent: Cleaning up player resources on blur');
         try {
-          if (player) {
-            player.pause();
-            // Optional: If we want to be extremely aggressive with "Release immediately in onPause":
-            // player.release(); // This would require re-initialization on focus
+          if (videoRef.current) {
+            videoRef.current.unloadAsync();
           }
         } catch (e) {
           console.log('VideoContent: Player cleanup error', e.message);
         }
-        if (videoRef.current) {
-          videoRef.current = null;
-        }
       };
-    }, [player])
+    }, [])
   );
 
   // Resolve Video URI
@@ -564,217 +537,109 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   }, [mediaItem.id, videoStates]);
 
 
-  // Event Listeners for Custom Controls & Restoration
-  useEffect(() => {
-    if (!player || !isReady) return;
-
-    const restoreState = () => {
-      if (hasRestoredRef.current || !videoStates?.current?.[mediaItem.id]) return;
-      const state = videoStates.current[mediaItem.id];
-
-      // Only restore if we have a valid non-zero position saved within the last 5 minutes
-      if (Date.now() - state.timestamp < 300000 && state.currentTime > 0.1) {
-        console.log(`VideoContent: Restoring state for ${mediaItem.id} to ${state.currentTime}`);
-
-        hasRestoredRef.current = true;
-        isRestoringRef.current = true;
-        player.currentTime = state.currentTime;
-
-        // Lock out updates for 2 seconds to let the player stabilize
-        setTimeout(() => {
-          isRestoringRef.current = false;
-        }, 2000);
-
-        // If it was playing, resume after a short delay to allow seek to settle
-        if (state.isPlaying && isActive) {
-          setTimeout(() => {
-            try {
-              if (isActive && player && player.status === 'readyToPlay') {
-                player.play();
-              }
-            } catch (e) {
-              console.warn('ViewerScreen: Failed to resume playback in timeout', e);
-            }
-          }, 500);
-        }
-      } else {
-        // If no state to restore, mark as "done" so we don't keep trying
-        hasRestoredRef.current = true;
+  // Handle Playback Status Updates
+  const onPlaybackStatusUpdate = (status) => {
+    if (!status.isLoaded) {
+      if (status.error) {
+        console.error('VideoContent: Playback error', status.error);
+        setLoadError(true);
       }
-    };
-
-    // If player is already ready (e.g. on re-render), try restoring immediately
-    if (player.status === 'readyToPlay') {
-      if (duration === 0) setDuration(player.duration);
-      restoreState();
+      return;
     }
 
-    const playbackSub = player.addListener('playbackStateChange', (e) => {
-      if (e.playbackState === 'finished') {
-        setIsPlaying(false);
-      }
-    });
-    const statusSub = player.addListener('statusChange', (s) => {
-      console.log(`VideoContent: Player status changed to ${s.status}`);
+    // Sync position and duration
+    // expo-av uses milliseconds, convert to seconds for existing UI compatibility if needed
+    // Actually, the user's request example said: "positionMillis" and "durationMillis"
+    // I will convert to seconds to keep the rest of the UI (CustomVideoControls) working as is.
+    const posSeconds = status.positionMillis / 1000;
+    const durSeconds = status.durationMillis / 1000;
 
-      if (s.status === 'readyToPlay') {
-        setDuration(player.duration); // Update duration
-        restoreState();
-      }
+    setCurrentTime(posSeconds);
+    if (durSeconds > 0) {
+      setDuration(durSeconds);
+    }
 
-      // If the native decoder/ExoPlayer reports an error, fail gracefully instead of crashing.
-      if (s.status === 'error') {
-        const errorDetail = s.error?.message || s.error?.code || 'Unknown error';
-        console.error('VideoContent: Player status error', errorDetail);
+    setIsPlaying(status.isPlaying);
 
-        try {
-          // Best‑effort pause/stop; if the player is already torn down this may throw.
-          if (player.playing) {
-            player.pause();
-          }
-        } catch (err) {
-          console.warn('VideoContent: Failed to pause after error', err);
-        }
+    if (videoStates?.current?.[mediaItem.id]) {
+      videoStates.current[mediaItem.id].isPlaying = status.isPlaying;
+      videoStates.current[mediaItem.id].currentTime = posSeconds;
+      videoStates.current[mediaItem.id].timestamp = Date.now();
+    }
 
-        // Show a friendly error state instead of letting the app terminate.
-        setLoadError(true);
-
-        // Surface a user‑visible alert with specific decoder info if possible
-        showAlert?.(
-          'Playback error',
-          'This video format, frame rate, or resolution is not fully supported by your device\'s hardware decoder. ' +
-          'Error: ' + errorDetail
-        );
-      }
-    });
-
-    const playSub = player.addListener('playingChange', (e) => {
-      setIsPlaying(e.isPlaying);
-      if (e.isPlaying) {
-        setHasInteracted(true);
-      }
-      if (videoStates?.current?.[mediaItem.id]) {
-        videoStates.current[mediaItem.id].isPlaying = e.isPlaying;
-        videoStates.current[mediaItem.id].timestamp = Date.now();
-      }
-    });
-
-    const timeSub = player.addListener('timeUpdate', (e) => {
-      // Update local state for UI immediately
-      setCurrentTime(e.currentTime);
-
-      // Secondary safety check for duration (if it was 0 previously)
-      if (player.duration > 0) {
-        setDuration((prev) => (prev === 0 ? player.duration : prev));
-      }
-
-      // DEEP STABILITY: If we are restoring OR the player just reset to 0 
-      // while we have a saved position, skip saving this 0 or old value.
-      if (isRestoringRef.current) return;
-
-      if (videoStates?.current) {
-        const prevState = videoStates.current[mediaItem.id];
-
-        // SOFT LOCKOUT: If player emits a time that is significantly behind 
-        // the last known good position within 5s of mount, ignore it.
-        // This stops movies from restarting because of native buffering/orientation events.
-        if (prevState && prevState.currentTime > 0.5) {
-          if (e.currentTime < prevState.currentTime - 0.5 && Date.now() - prevState.timestamp < 3000) {
-            return;
-          }
-        }
-
-        // Only save if it's a significant enough update or after a delay
-        // (Handled by timeUpdateEventInterval mostly, but extra safety here)
-        videoStates.current[mediaItem.id] = {
-          ...prevState,
-          currentTime: e.currentTime,
-          isPlaying: player.playing,
-          uri: videoUri,
-          timestamp: Date.now()
-        };
-      }
-    });
-
-    return () => {
-      playbackSub.remove();
-      statusSub.remove();
-      playSub.remove();
-      timeSub.remove();
-    };
-  }, [player, mediaItem.id, videoStates, isActive, isReady]);
+    if (status.didJustFinish) {
+      setIsPlaying(false);
+      setHasInteracted(false);
+    }
+  };
 
   // Pause when inactive
   useEffect(() => {
-    try {
-      if (!isActive && player && player.status === 'readyToPlay' && isPlaying) {
-        player.pause();
+    const pauseOnInactive = async () => {
+      try {
+        if (!isActive && videoRef.current && isPlaying) {
+          await videoRef.current.pauseAsync();
+        }
+      } catch (e) {
+        console.warn('ViewerScreen: Error pausing background video', e);
       }
-    } catch (e) {
-      console.warn('ViewerScreen: Error pausing background video', e);
-    }
-  }, [isActive, player, isPlaying]);
+    };
+    pauseOnInactive();
+  }, [isActive, isPlaying]);
 
-  const togglePlay = () => {
-    if (!player || !videoUri) return;
+  // Auto-mount and auto-play when active
+  useEffect(() => {
+    if (isActive && isReady && videoUri) {
+      console.log('VideoContent: Auto-mounting and playing active video');
+      setShouldShowVideo(true);
+      setHasInteracted(true);
+    }
+  }, [isActive, isReady, videoUri]);
+
+  const togglePlay = async () => {
+    if (!videoRef.current || !videoUri) return;
 
     try {
-      // PHASE 2: MOUNT VIDEO ON PLAY
       if (!shouldShowVideo) {
-        console.log('VideoContent: Mounting VideoView and starting preparation');
         setShouldShowVideo(true);
         setHasInteracted(true);
-        player.replace(videoUri);
-        player.play();
         return;
       }
 
-      if (player.status !== 'readyToPlay') return;
+      const status = await videoRef.current.getStatusAsync();
+      if (!status.isLoaded) return;
 
-      // Check if video is finished using player's native state
-      const isFinished = player.playbackState === 'finished';
-
-      if (isFinished) {
-        // Precise restart: seek to 0 and play in one go
-        player.currentTime = 0;
-        setCurrentTime(0);
-        player.play();
-        setHasInteracted(true);
+      if (status.isPlaying) {
+        await videoRef.current.pauseAsync();
       } else {
-        // Normal toggle
-        if (isPlaying) {
-          player.pause();
-        } else {
-          setHasInteracted(true);
-          player.play();
+        if (status.didJustFinish) {
+          await videoRef.current.setPositionAsync(0);
         }
+        await videoRef.current.playAsync();
       }
     } catch (e) {
       console.error('VideoContent: Error toggling play', e);
     }
   };
 
-  const handleRewind10 = () => {
-    if (player) {
-      const newTime = Math.max(0, currentTime - 10);
-      player.currentTime = newTime;
-      setCurrentTime(newTime);
+  const handleRewind10 = async () => {
+    if (videoRef.current) {
+      const newTime = Math.max(0, (currentTime - 10) * 1000);
+      await videoRef.current.setPositionAsync(newTime);
     }
   };
 
-  const handleForward10 = () => {
-    if (player && duration) {
-      const newTime = Math.min(duration, currentTime + 10);
-      player.currentTime = newTime;
-      setCurrentTime(newTime);
+  const handleForward10 = async () => {
+    if (videoRef.current && duration) {
+      const newTime = Math.min(duration * 1000, (currentTime + 10) * 1000);
+      await videoRef.current.setPositionAsync(newTime);
     }
   };
 
-  const handleSeek = (time) => {
-    if (player && player.status === 'readyToPlay') {
+  const handleSeek = async (timeInSeconds) => {
+    if (videoRef.current) {
       try {
-        player.currentTime = time;
-        setCurrentTime(time); // Optimistic update
+        await videoRef.current.setPositionAsync(timeInSeconds * 1000);
       } catch (e) {
         console.warn('ViewerScreen: Seek failed', e);
       }
@@ -799,32 +664,14 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   };
 
   const videoBoxStyle = useMemo(() => {
-    const { width: sw, height: sh } = dimensions;
-    if (!videoDims.width || !videoDims.height) {
-      return { width: sw, height: sh, position: 'absolute' };
-    }
-
-    const { width: vw, height: vh } = videoDims;
-    const videoAspect = vw / vh;
-    const screenAspect = sw / sh;
-
-    let width, height;
-    if (videoAspect > screenAspect) {
-      width = sw;
-      height = sw / videoAspect;
-    } else {
-      height = sh;
-      width = sh * videoAspect;
-    }
-
     return {
-      width,
-      height,
-      position: 'absolute',
-      left: (sw - width) / 2,
-      top: (sh - height) / 2,
+      width: dimensions.width,
+      height: dimensions.height,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#000'
     };
-  }, [videoDims, dimensions]);
+  }, [dimensions]);
 
   const videoControlsStyle = useAnimatedStyle(() => ({
     opacity: controlsOpacity.value,
@@ -849,35 +696,32 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   }
 
   return (
-    <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
-      {/* Background Video Layer - ONLY MOUNTED AFTER USER INTERACTION */}
-      <View style={videoBoxStyle} pointerEvents="box-none">
-        {shouldShowVideo && player && (
-          <VideoView
-            ref={videoRef}
-            player={player}
-            style={StyleSheet.absoluteFill}
-            nativeControls={false}
-            allowsFullscreen={false} // We handle rotation manually
-            requiresLinearPlayback={false}
-            contentFit="contain"
-            // Use TextureView on Android to improve stability with high‑fps HEVC and VFR content.
-            surfaceType="textureView"
-          />
-        )}
+    <View style={videoBoxStyle}>
+      {/* Background Video Layer - Centered via videoBoxStyle flex */}
+      {shouldShowVideo && (
+        <Video
+          ref={videoRef}
+          source={{ uri: videoUri }}
+          style={{ width: '100%', height: '100%' }}
+          resizeMode="contain"
+          shouldPlay={isActive}
+          onPlaybackStatusUpdate={onPlaybackStatusUpdate}
+          useNativeControls={false}
+          isLooping={true}
+        />
+      )}
 
-        {/* PHASE 2: STATIC THUMBNAIL OVERLAY (Shown until video is mounted) */}
-        {!shouldShowVideo && (
-          <ImageContent
-            mediaItem={mediaItem}
-            isActive={isActive}
-            onZoomChange={() => { }}
-            onToggleUI={onToggleUI}
-            refreshKey={mediaItem.id}
-            dimensions={dimensions}
-          />
-        )}
-      </View>
+      {/* PHASE 2: STATIC THUMBNAIL OVERLAY (Shown until video is mounted) */}
+      {!shouldShowVideo && (
+        <ImageContent
+          mediaItem={mediaItem}
+          isActive={isActive}
+          onZoomChange={() => { }}
+          onToggleUI={onToggleUI}
+          refreshKey={mediaItem.id}
+          dimensions={dimensions}
+        />
+      )}
 
       {/* Transparent overlay for toggling controls - middle layer, captures taps on empty areas */}
       {/* Only active after user has interacted, otherwise initial play button handles touches */}
@@ -936,7 +780,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           {/* Bottom Controls Layer */}
           {/* Video Bottom Controls */}
           <CustomVideoControls
-            player={player}
+            videoRef={videoRef}
             isPlaying={isPlaying}
             onPlayPause={togglePlay}
             duration={duration}
@@ -949,7 +793,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           />
         </Animated.View>
       )}
-    </View>
+    </View >
   );
 };
 
