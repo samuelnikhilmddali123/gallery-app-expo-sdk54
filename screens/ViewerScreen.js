@@ -505,6 +505,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const [currentTime, setCurrentTime] = useState(cachedState?.currentTime || 0);
   const [duration, setDuration] = useState(0);
   const hasRestoredRef = useRef(false);
+  const wasPlayingBeforeScrubRef = useRef(false);
   const [videoDims, setVideoDims] = useState({
     width: mediaItem.width || 0,
     height: mediaItem.height || 0
