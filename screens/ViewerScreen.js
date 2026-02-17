@@ -213,20 +213,24 @@ const CustomVideoControls = ({
   isLandscape,
   onIsInteracting,
   onScrubToggle,
-  colors
+  colors,
+  availableAudioTracks = [],
+  currentAudioTrack = null,
+  onAudioSelect,
+  availableTextTracks = [],
+  currentTextTrack = null,
+  onTextSelect
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [showTextMenu, setShowTextMenu] = useState(false);
 
   // Scrubbing Shared Values
   const scrubX = useSharedValue(0);
   const isScrubbing = useSharedValue(false);
   const [progressBarWidth, setProgressBarWidth] = useState(0);
-  // availableAudioTracks and currentAudioTrack are more complex in expo-av, 
-  // we will disable them for now to ensure stability of the main seeking fix.
-  const [availableAudioTracks, setAvailableAudioTracks] = useState([]);
-  const [currentAudioTrack, setCurrentAudioTrack] = useState(null);
+
   const [currentPlaybackRate, setCurrentPlaybackRate] = useState(1.0);
 
   useEffect(() => {
@@ -270,9 +274,15 @@ const CustomVideoControls = ({
     setShowSettings(false);
   };
 
-  const handleAudioSelect = (track) => {
-    // expo-av audio track selection is not directly exposed as objects
+  const handleAudioTrackChange = (track) => {
+    onAudioSelect?.(track);
     setShowAudioMenu(false);
+    setShowSettings(false);
+  };
+
+  const handleTextTrackChange = (track) => {
+    onTextSelect?.(track);
+    setShowTextMenu(false);
     setShowSettings(false);
   };
 
@@ -317,6 +327,21 @@ const CustomVideoControls = ({
                 </View>
                 <Text style={controlStyles.menuItemValue}>
                   {getLanguageName(currentAudioTrack?.language)}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {availableTextTracks.length > 0 && (
+              <TouchableOpacity
+                style={controlStyles.menuItem}
+                onPress={() => setShowTextMenu(true)}
+              >
+                <View style={controlStyles.menuItemLeft}>
+                  <Ionicons name="chatbox-ellipses-outline" size={20} color="#fff" />
+                  <Text style={controlStyles.menuItemText}>Captions</Text>
+                </View>
+                <Text style={controlStyles.menuItemValue}>
+                  {currentTextTrack ? getLanguageName(currentTextTrack.language) : 'Off'}
                 </Text>
               </TouchableOpacity>
             )}
@@ -380,10 +405,47 @@ const CustomVideoControls = ({
                 <TouchableOpacity
                   key={idx}
                   style={[controlStyles.menuItem, currentAudioTrack === track && controlStyles.menuItemSelected]}
-                  onPress={() => handleAudioSelect(track)}
+                  onPress={() => handleAudioTrackChange(track)}
                 >
                   <Text style={controlStyles.menuItemText}>{getLanguageName(track.language)}</Text>
                   {currentAudioTrack === track && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Caption Selection Modal */}
+      <Modal
+        visible={showTextMenu}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowTextMenu(false)}
+      >
+        <TouchableOpacity
+          style={controlStyles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowTextMenu(false)}
+        >
+          <View style={controlStyles.menuContainer}>
+            <Text style={controlStyles.menuTitle}>Captions</Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              <TouchableOpacity
+                style={[controlStyles.menuItem, currentTextTrack === null && controlStyles.menuItemSelected]}
+                onPress={() => handleTextTrackChange(null)}
+              >
+                <Text style={controlStyles.menuItemText}>Off</Text>
+                {currentTextTrack === null && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+              </TouchableOpacity>
+              {availableTextTracks.map((track, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[controlStyles.menuItem, currentTextTrack === track && controlStyles.menuItemSelected]}
+                  onPress={() => handleTextTrackChange(track)}
+                >
+                  <Text style={controlStyles.menuItemText}>{getLanguageName(track.language)}</Text>
+                  {currentTextTrack === track && <Ionicons name="checkmark" size={20} color="#007AFF" />}
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -467,6 +529,12 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     width: mediaItem.width || 0,
     height: mediaItem.height || 0
   });
+
+  // Track settings (Audio & Captions)
+  const [availableAudioTracks, setAvailableAudioTracks] = useState([]);
+  const [currentAudioTrack, setCurrentAudioTrack] = useState(null);
+  const [availableTextTracks, setAvailableTextTracks] = useState([]);
+  const [currentTextTrack, setCurrentTextTrack] = useState(null);
 
   // Track if we've already restored the position for this mount
   const hasRestoredRef = useRef(false);
@@ -646,6 +714,45 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     return () => { isMounted = false; };
   }, [mediaItem.id, videoStates]);
 
+
+  const handleLoad = (data) => {
+    setIsReady(true);
+    // Capture track metadata if available
+    if (data.audioTracks) {
+      setAvailableAudioTracks(data.audioTracks);
+      // Select preferred or first track
+      const initialAudio = data.audioTracks.find(t => t.language === 'en') || data.audioTracks[0];
+      setCurrentAudioTrack(initialAudio);
+    }
+    if (data.textTracks) {
+      setAvailableTextTracks(data.textTracks);
+      // Default to off (null)
+      setCurrentTextTrack(null);
+    }
+  };
+
+  const handleAudioSelect = async (track) => {
+    if (videoRef.current) {
+      try {
+        await videoRef.current.setStatusAsync({ audioTrack: track });
+        setCurrentAudioTrack(track);
+      } catch (e) {
+        console.warn('VideoContent: Error switching audio track', e);
+      }
+    }
+  };
+
+  const handleTextSelect = async (track) => {
+    if (videoRef.current) {
+      try {
+        // track can be null to turn off captions
+        await videoRef.current.setStatusAsync({ textTrack: track });
+        setCurrentTextTrack(track);
+      } catch (e) {
+        console.warn('VideoContent: Error switching text track', e);
+      }
+    }
+  };
 
   // Handle Playback Status Updates
   const onPlaybackStatusUpdate = (status) => {
@@ -861,6 +968,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           style={{ width: '100%', height: '100%' }}
           resizeMode="contain"
           shouldPlay={isActive}
+          onLoad={handleLoad}
           onPlaybackStatusUpdate={onPlaybackStatusUpdate}
           useNativeControls={false}
           isLooping={true}
@@ -949,6 +1057,12 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
             onIsInteracting={setIsInteracting}
             onScrubToggle={handleScrubToggle}
             colors={colors}
+            availableAudioTracks={availableAudioTracks}
+            currentAudioTrack={currentAudioTrack}
+            onAudioSelect={handleAudioSelect}
+            availableTextTracks={availableTextTracks}
+            currentTextTrack={currentTextTrack}
+            onTextSelect={handleTextSelect}
           />
         </Animated.View>
       )}
