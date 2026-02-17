@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform } from 'react-native';
 import { Image } from 'expo-image';
-import { Video, Audio } from 'expo-av'; // Use expo-av for precise seeking control
+import { Video as ExpoAVVideo, Audio } from 'expo-av';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -56,7 +57,9 @@ const getLanguageName = (code) => {
 // --- Scrubbing Preview Component ---
 const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWidth, colors }) => {
   const [previewTime, setPreviewTime] = useState(0);
-  const previewVideoRef = useRef(null);
+  const previewPlayer = useVideoPlayer(videoUri || '', (player) => {
+    player.muted = true;
+  });
 
   useAnimatedReaction(
     () => ({ x: scrubX.value, active: isScrubbing.value }),
@@ -69,11 +72,8 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
   );
 
   useEffect(() => {
-    if (previewVideoRef.current && isScrubbing.value) {
-      previewVideoRef.current.setPositionAsync(previewTime * 1000, {
-        toleranceBeforeMillis: 0,
-        toleranceAfterMillis: 0
-      });
+    if (previewPlayer && isScrubbing.value) {
+      previewPlayer.seekBy(previewTime - previewPlayer.currentTime);
     }
   }, [previewTime]);
 
@@ -97,13 +97,11 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
   return (
     <Animated.View style={[controlStyles.previewContainer, animatedStyle]}>
       <View style={[controlStyles.previewContent, { borderColor: 'rgba(255,255,255,0.3)', backgroundColor: '#000' }]}>
-        <Video
-          ref={previewVideoRef}
-          source={{ uri: videoUri }}
+        <VideoView
+          player={previewPlayer}
           style={controlStyles.previewVideo}
-          resizeMode="cover"
-          shouldPlay={false}
-          isMuted={true}
+          contentFit="cover"
+          nativeControls={false}
         />
         <View style={controlStyles.previewTimeOverlay}>
           <Text style={controlStyles.previewTimeText}>{formatTime(previewTime)}</Text>
@@ -201,7 +199,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
 };
 
 const CustomVideoControls = ({
-  videoRef, // Use videoRef for expo-av
+  player, // Use expo-video player object
   videoUri,
   isPlaying,
   onPlayPause,
@@ -234,21 +232,9 @@ const CustomVideoControls = ({
   const [currentPlaybackRate, setCurrentPlaybackRate] = useState(1.0);
 
   useEffect(() => {
-    if (!videoRef?.current) return;
-
-    const fetchStatus = async () => {
-      try {
-        const status = await videoRef.current.getStatusAsync();
-        if (status.isLoaded) {
-          setCurrentPlaybackRate(status.rate || 1.0);
-        }
-      } catch (e) {
-        console.warn('CustomVideoControls: Error fetching status', e);
-      }
-    };
-
-    fetchStatus();
-  }, [videoRef, visible]); // Re-fetch when visible
+    if (!player) return;
+    setCurrentPlaybackRate(player.playbackRate);
+  }, [player, visible]); // Sync speed when visible
 
   const formatTime = (timeInSeconds) => {
     if (!timeInSeconds && timeInSeconds !== 0) return '0:00';
@@ -261,14 +247,10 @@ const CustomVideoControls = ({
 
   const speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-  const handleSpeedSelect = async (rate) => {
-    if (videoRef?.current) {
-      try {
-        await videoRef.current.setRateAsync(rate, true);
-        setCurrentPlaybackRate(rate);
-      } catch (e) {
-        console.warn('CustomVideoControls: Error setting rate', e);
-      }
+  const handleSpeedSelect = (rate) => {
+    if (player) {
+      player.playbackRate = rate;
+      setCurrentPlaybackRate(rate);
     }
     setShowSpeedMenu(false);
     setShowSettings(false);
@@ -516,53 +498,115 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const [shouldShowVideo, setShouldShowVideo] = useState(!!videoStates?.current?.[mediaItem.id] || false); // Initialize true if cached
   const { showAlert } = useDialog();
 
-  // expo-av Video Reference
-  const videoRef = useRef(null);
-
   // Initialize from cache if available (for rotation persistence)
   const cachedState = videoStates?.current?.[mediaItem.id];
 
   // Custom Control State
   const [currentTime, setCurrentTime] = useState(cachedState?.currentTime || 0);
   const [duration, setDuration] = useState(0);
+  const hasRestoredRef = useRef(false);
   const [videoDims, setVideoDims] = useState({
     width: mediaItem.width || 0,
     height: mediaItem.height || 0
   });
 
-  // Track settings (Audio & Captions)
-  const [availableAudioTracks, setAvailableAudioTracks] = useState([]);
-  const [currentAudioTrack, setCurrentAudioTrack] = useState(null);
-  const [availableTextTracks, setAvailableTextTracks] = useState([]);
-  const [currentTextTrack, setCurrentTextTrack] = useState(null);
-
-  // Track if we've already restored the position for this mount
-  const hasRestoredRef = useRef(false);
-  const isRestoringRef = useRef(false);
-
-  // Track playback status for scrubbing and restoration
-  const wasPlayingBeforeScrubRef = useRef(false);
-  const isScrubbingRef = useRef(false);
-
-  // Apply player settings in a stable effect
+  // Resolve Video URI
   useEffect(() => {
-    const setupAudio = async () => {
+    let isMounted = true;
+    const loadUri = async () => {
       try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          interruptionModeIOS: 1, // InterruptionModeIOS.DoNotMix
-          shouldDuckAndroid: true,
-          interruptionModeAndroid: 1, // InterruptionModeAndroid.DoNotMix
-          playThroughEarpieceAndroid: false
-        });
+        if (mediaItem.uri && !mediaItem.id.toString().startsWith('ph_')) {
+          setVideoUri(mediaItem.uri);
+          setIsReady(true);
+        } else {
+          // Resolve for cloud/library assets
+          const assetInfo = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
+          if (isMounted) {
+            if (assetInfo.localUri || assetInfo.uri) {
+              setVideoUri(assetInfo.localUri || assetInfo.uri);
+              setIsReady(true);
+            } else {
+              setLoadError(true);
+            }
+          }
+        }
       } catch (e) {
-        console.warn('VideoContent: Failed to set audio mode', e);
+        console.error("Error determining video URI", e);
+        if (isMounted) setLoadError(true);
       }
     };
-    setupAudio();
-  }, []);
+    loadUri();
+    return () => { isMounted = false; };
+  }, [mediaItem.id]);
+
+  const player = useVideoPlayer(videoUri || '', (player) => {
+    player.loop = true;
+  });
+
+  // Track settings (Audio & Captions) from player object
+  const availableAudioTracks = player?.availableAudioTracks || [];
+  const currentAudioTrack = player?.selectedAudioTrack || null;
+  const availableTextTracks = player?.availableSubtitleTracks || [];
+  const currentTextTrack = player?.selectedSubtitleTrack || null;
+
+  // Sync player state to our local state
+  useEffect(() => {
+    if (!player) return;
+
+    if (isActive) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }, [player, isActive]);
+
+  useEffect(() => {
+    if (!player) return;
+
+    const timeUpdateSub = player.addListener('timeUpdate', (event) => {
+      const pos = event.currentTime;
+      setCurrentTime(pos);
+      if (videoStates?.current?.[mediaItem.id]) {
+        videoStates.current[mediaItem.id].currentTime = pos;
+      }
+    });
+
+    const playingSub = player.addListener('playingChange', (isPlayingNow) => {
+      setIsPlaying(isPlayingNow);
+      if (videoStates?.current?.[mediaItem.id]) {
+        videoStates.current[mediaItem.id].isPlaying = isPlayingNow;
+      }
+    });
+
+    // Handle initial seek if cached
+    const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
+    if (cachedTime > 0.1 && player.duration > 0 && !hasRestoredRef.current) {
+      player.seekBy(cachedTime - player.currentTime);
+      hasRestoredRef.current = true;
+    }
+
+    // Duration is usually available on load
+    if (player.duration > 0) {
+      setDuration(player.duration);
+    }
+
+    return () => {
+      timeUpdateSub.remove();
+      playingSub.remove();
+    };
+  }, [player, videoUri]);
+
+  const handleAudioSelect = (track) => {
+    if (player) {
+      player.setAudioTrack(track);
+    }
+  };
+
+  const handleTextSelect = (track) => {
+    if (player) {
+      player.setSubtitleTrack(track);
+    }
+  };
 
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
@@ -583,13 +627,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     useCallback(() => {
       const handleAppStateChange = (nextAppState) => {
         if (nextAppState.match(/inactive|background/)) {
-          console.log('VideoContent: App backgrounded, pausing player');
-          try {
-            if (videoRef.current) {
-              videoRef.current.pauseAsync();
-            }
-          } catch (e) {
-            console.log('VideoContent: Pause on background failed', e.message);
+          if (player) {
+            player.pause();
           }
         }
       };
@@ -598,16 +637,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
       return () => {
         subscription.remove();
-        console.log('VideoContent: Cleaning up player resources on blur');
-        try {
-          if (videoRef.current) {
-            videoRef.current.unloadAsync();
-          }
-        } catch (e) {
-          console.log('VideoContent: Player cleanup error', e.message);
-        }
       };
-    }, [])
+    }, [player])
   );
 
   // Resolve Video URI
@@ -715,110 +746,9 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   }, [mediaItem.id, videoStates]);
 
 
-  const handleLoad = (data) => {
-    setIsReady(true);
-    // Capture track metadata if available
-    if (data.audioTracks) {
-      setAvailableAudioTracks(data.audioTracks);
-      // Select preferred or first track
-      const initialAudio = data.audioTracks.find(t => t.language === 'en') || data.audioTracks[0];
-      setCurrentAudioTrack(initialAudio);
-    }
-    if (data.textTracks) {
-      setAvailableTextTracks(data.textTracks);
-      // Default to off (null)
-      setCurrentTextTrack(null);
-    }
-  };
+  // Handle Playback Status Updates (Redundant with expo-video event listeners, removed)
 
-  const handleAudioSelect = async (track) => {
-    if (videoRef.current) {
-      try {
-        await videoRef.current.setStatusAsync({ audioTrack: track });
-        setCurrentAudioTrack(track);
-      } catch (e) {
-        console.warn('VideoContent: Error switching audio track', e);
-      }
-    }
-  };
-
-  const handleTextSelect = async (track) => {
-    if (videoRef.current) {
-      try {
-        // track can be null to turn off captions
-        await videoRef.current.setStatusAsync({ textTrack: track });
-        setCurrentTextTrack(track);
-      } catch (e) {
-        console.warn('VideoContent: Error switching text track', e);
-      }
-    }
-  };
-
-  // Handle Playback Status Updates
-  const onPlaybackStatusUpdate = (status) => {
-    if (!status.isLoaded) {
-      if (status.error) {
-        console.error('VideoContent: Playback error', status.error);
-        setLoadError(true);
-      }
-      return;
-    }
-
-    // Sync position and duration
-    const posSeconds = status.positionMillis / 1000;
-    const durSeconds = status.durationMillis / 1000;
-
-    // RESTORATION LOGIC: If we have a cached time and haven't restored yet, seek now.
-    const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
-    if (status.isLoaded && !hasRestoredRef.current && cachedTime > 0.1) {
-      console.log('VideoContent: Restoring playback position to', cachedTime);
-      hasRestoredRef.current = true;
-      isRestoringRef.current = true;
-      videoRef.current?.setPositionAsync(cachedTime * 1000).then(() => {
-        isRestoringRef.current = false;
-        // If it was playing before, ensure it continues
-        if (videoStates.current[mediaItem.id]?.isPlaying) {
-          videoRef.current?.playAsync();
-        }
-      });
-      return; // Skip state update during seek trigger to avoid UI jitter
-    }
-
-    // Skip updates if we are in the middle of a restoration seek
-    if (isRestoringRef.current) return;
-
-    setCurrentTime(posSeconds);
-    if (durSeconds > 0) {
-      setDuration(durSeconds);
-    }
-
-    setIsPlaying(status.isPlaying);
-
-    if (videoStates?.current?.[mediaItem.id]) {
-      videoStates.current[mediaItem.id].isPlaying = status.isPlaying;
-      videoStates.current[mediaItem.id].currentTime = posSeconds;
-      videoStates.current[mediaItem.id].timestamp = Date.now();
-    }
-
-    if (status.didJustFinish) {
-      setIsPlaying(false);
-      setHasInteracted(false);
-    }
-  };
-
-  // Pause when inactive
-  useEffect(() => {
-    const pauseOnInactive = async () => {
-      try {
-        if (!isActive && videoRef.current && isPlaying) {
-          await videoRef.current.pauseAsync();
-        }
-      } catch (e) {
-        console.warn('ViewerScreen: Error pausing background video', e);
-      }
-    };
-    pauseOnInactive();
-  }, [isActive, isPlaying]);
+  // Handle foreground/background via AppState handled in focus effect
 
   // Auto-mount and auto-play when active
   useEffect(() => {
@@ -829,83 +759,49 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     }
   }, [isActive, isReady, videoUri]);
 
-  const togglePlay = async () => {
-    if (!videoRef.current || !videoUri) return;
+  const togglePlay = () => {
+    if (!player) return;
 
-    try {
-      if (!shouldShowVideo) {
-        setShouldShowVideo(true);
-        setHasInteracted(true);
-        return;
-      }
+    if (isPlaying) {
+      player.pause();
+    } else {
+      player.play();
+    }
 
-      const status = await videoRef.current.getStatusAsync();
-      if (!status.isLoaded) return;
-
-      if (status.isPlaying) {
-        await videoRef.current.pauseAsync();
-      } else {
-        if (status.didJustFinish) {
-          await videoRef.current.setPositionAsync(0);
-        }
-        await videoRef.current.playAsync();
-      }
-    } catch (e) {
-      console.error('VideoContent: Error toggling play', e);
+    if (!hasInteracted) {
+      setHasInteracted(true);
     }
   };
 
-  const handleRewind10 = async () => {
-    if (videoRef.current) {
-      const newTime = Math.max(0, (currentTime - 10) * 1000);
-      await videoRef.current.setPositionAsync(newTime);
+  const handleRewind10 = () => {
+    if (player) {
+      player.seekBy(-10);
     }
   };
 
-  const handleForward10 = async () => {
-    if (videoRef.current && duration) {
-      const newTime = Math.min(duration * 1000, (currentTime + 10) * 1000);
-      await videoRef.current.setPositionAsync(newTime);
+  const handleForward10 = () => {
+    if (player && duration) {
+      player.seekBy(10);
     }
   };
 
-  const handleSeek = async (timeInSeconds, isScrubbing = false) => {
-    if (videoRef.current) {
-      try {
-        // Continuous seek during scrubbing uses zero tolerances for precise frame updates
-        if (isScrubbing) {
-          await videoRef.current.setPositionAsync(timeInSeconds * 1000, {
-            toleranceBeforeMillis: 0,
-            toleranceAfterMillis: 0
-          });
-        } else {
-          await videoRef.current.setPositionAsync(timeInSeconds * 1000);
-        }
-      } catch (e) {
-        console.warn('ViewerScreen: Seek failed', e);
+  const handleSeek = (timeInSeconds, isScrubbing = false) => {
+    if (player) {
+      player.seekBy(timeInSeconds - player.currentTime);
+      setCurrentTime(timeInSeconds);
+    }
+  };
+
+  const handleScrubToggle = (isScrubbing) => {
+    if (!player) return;
+
+    if (isScrubbing) {
+      wasPlayingBeforeScrubRef.current = isPlaying;
+      player.pause();
+    } else {
+      if (wasPlayingBeforeScrubRef.current) {
+        player.play();
       }
-    }
-  };
-
-  const handleScrubToggle = async (isScrubbing) => {
-    if (!videoRef.current) return;
-    isScrubbingRef.current = isScrubbing;
-
-    try {
-      if (isScrubbing) {
-        const status = await videoRef.current.getStatusAsync();
-        wasPlayingBeforeScrubRef.current = status.isLoaded && status.isPlaying;
-        if (wasPlayingBeforeScrubRef.current) {
-          await videoRef.current.pauseAsync();
-        }
-      } else {
-        // Resume if it was playing before scrubbing started
-        if (wasPlayingBeforeScrubRef.current) {
-          await videoRef.current.playAsync();
-        }
-      }
-    } catch (e) {
-      console.warn('ViewerScreen: Scrub toggle failed', e);
     }
   };
 
@@ -962,16 +858,11 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     <View style={videoBoxStyle}>
       {/* Background Video Layer - Centered via videoBoxStyle flex */}
       {shouldShowVideo && (
-        <Video
-          ref={videoRef}
-          source={{ uri: videoUri }}
+        <VideoView
+          player={player}
           style={{ width: '100%', height: '100%' }}
-          resizeMode="contain"
-          shouldPlay={isActive}
-          onLoad={handleLoad}
-          onPlaybackStatusUpdate={onPlaybackStatusUpdate}
-          useNativeControls={false}
-          isLooping={true}
+          contentFit="contain"
+          nativeControls={false}
         />
       )}
 
@@ -1044,7 +935,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           {/* Bottom Controls Layer */}
           {/* Video Bottom Controls */}
           <CustomVideoControls
-            videoRef={videoRef}
+            player={player}
             videoUri={videoUri}
             isPlaying={isPlaying}
             onPlayPause={togglePlay}
