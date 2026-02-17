@@ -216,12 +216,15 @@ export default function EditPhotoScreen({ route, navigation }) {
       const asset = await MediaLibrary.createAssetAsync(capturedUri);
       const fullAsset = await MediaLibrary.getAssetInfoAsync(asset.id);
 
-      navigation.navigate('Photos', {
-        croppedAsset: {
-          ...fullAsset,
-          uri: fullAsset.localUri || fullAsset.uri
-        },
-        originalAssetId: item?.id
+      navigation.navigate('MainTabs', {
+        screen: 'Photos',
+        params: {
+          croppedAsset: {
+            ...fullAsset,
+            uri: fullAsset.localUri || fullAsset.uri
+          },
+          originalAssetId: item?.id
+        }
       });
 
       showAlert('Success', 'Photo updated successfully!');

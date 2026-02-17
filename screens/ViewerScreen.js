@@ -14,7 +14,7 @@ import ZoomableImage from '../components/ZoomableImage';
 import { useDialog } from '../contexts/DialogContext';
 import { moveToSystemTrash } from '../services/mediaService';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS } from 'react-native-reanimated';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS, useAnimatedReaction, useDerivedValue } from 'react-native-reanimated';
 
 // Get initial dimensions
 const getScreenDimensions = () => {
@@ -29,101 +29,180 @@ const isVideoItem = (mediaItem) => {
     (mediaItem?.duration && mediaItem.duration > 0);
 };
 
+// Helper for time formatting
+const formatTime = (timeInSeconds) => {
+  if (!timeInSeconds && timeInSeconds !== 0) return '0:00';
+  const minutes = Math.floor(timeInSeconds / 60);
+  const seconds = Math.floor(timeInSeconds % 60);
+  return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+};
+
 // Helper for language names
 const getLanguageName = (code) => {
   if (!code) return 'Default';
   const languageMap = {
-    'en': 'English',
-    'es': 'Spanish',
-    'fr': 'French',
-    'de': 'German',
-    'it': 'Italian',
-    'pt': 'Portuguese',
-    'ru': 'Russian',
-    'ja': 'Japanese',
-    'ko': 'Korean',
-    'zh': 'Chinese',
-    'hi': 'Hindi',
-    'bn': 'Bengali',
-    'te': 'Telugu',
-    'mr': 'Marathi',
-    'ta': 'Tamil',
-    'ur': 'Urdu',
-    'gu': 'Gujarati',
-    'kn': 'Kannada',
-    'ml': 'Malayalam',
-    'pa': 'Punjabi',
-    'ar': 'Arabic',
-    'tr': 'Turkish',
-    'vi': 'Vietnamese',
-    'pl': 'Polish',
-    'uk': 'Ukrainian',
-    'id': 'Indonesian',
-    'ms': 'Malay',
-    'th': 'Thai',
+    'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German', 'it': 'Italian',
+    'pt': 'Portuguese', 'ru': 'Russian', 'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese',
+    'hi': 'Hindi', 'bn': 'Bengali', 'te': 'Telugu', 'mr': 'Marathi', 'ta': 'Tamil',
+    'ur': 'Urdu', 'gu': 'Gujarati', 'kn': 'Kannada', 'ml': 'Malayalam', 'pa': 'Punjabi',
+    'ar': 'Arabic', 'tr': 'Turkish', 'vi': 'Vietnamese', 'pl': 'Polish', 'uk': 'Ukrainian',
+    'id': 'Indonesian', 'ms': 'Malay', 'th': 'Thai'
   };
-
-  // Clean up code (sometimes it might be en-US or en_US)
   const baseCode = code.split(/[-_]/)[0].toLowerCase();
   return languageMap[baseCode] || code.toUpperCase();
 };
 
 // --- Video Content Component ---
-// Separated to allow cleaner use of hooks
-// --- Custom Video Controls ---
-// --- ProgressBar Component ---
-const ProgressBar = ({ progress, onSeek, duration, onIsInteracting }) => {
-  const layoutWidth = useRef(0);
+// --- Scrubbing Preview Component ---
+const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWidth, colors }) => {
+  const [previewTime, setPreviewTime] = useState(0);
+  const previewVideoRef = useRef(null);
 
-  const handleTouch = (evt) => {
-    if (layoutWidth.current > 0 && duration > 0) {
-      const { locationX } = evt.nativeEvent;
-      const percent = Math.max(0, Math.min(1, locationX / layoutWidth.current));
-      onSeek(percent * duration);
+  useAnimatedReaction(
+    () => ({ x: scrubX.value, active: isScrubbing.value }),
+    (data) => {
+      if (data.active && containerWidth > 0) {
+        const time = (data.x / containerWidth) * duration;
+        runOnJS(setPreviewTime)(time);
+      }
+    }
+  );
+
+  useEffect(() => {
+    if (previewVideoRef.current && isScrubbing.value) {
+      previewVideoRef.current.setPositionAsync(previewTime * 1000, {
+        toleranceBeforeMillis: 0,
+        toleranceAfterMillis: 0
+      });
+    }
+  }, [previewTime]);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    // Keep within bounds: popup is 120px wide
+    const halfWidth = 60;
+    const clampedX = Math.max(halfWidth, Math.min(containerWidth - halfWidth, scrubX.value));
+
+    return {
+      opacity: withTiming(isScrubbing.value ? 1 : 0, { duration: 150 }),
+      transform: [
+        { translateX: clampedX - halfWidth },
+        { translateY: withTiming(isScrubbing.value ? -10 : 10, { duration: 200 }) },
+        { scale: withTiming(isScrubbing.value ? 1 : 0.8, { duration: 200 }) }
+      ]
+    };
+  });
+
+  if (!videoUri) return null;
+
+  return (
+    <Animated.View style={[controlStyles.previewContainer, animatedStyle]}>
+      <View style={[controlStyles.previewContent, { borderColor: 'rgba(255,255,255,0.3)', backgroundColor: '#000' }]}>
+        <Video
+          ref={previewVideoRef}
+          source={{ uri: videoUri }}
+          style={controlStyles.previewVideo}
+          resizeMode="cover"
+          shouldPlay={false}
+          isMuted={true}
+        />
+        <View style={controlStyles.previewTimeOverlay}>
+          <Text style={controlStyles.previewTimeText}>{formatTime(previewTime)}</Text>
+        </View>
+      </View>
+      <View style={controlStyles.previewArrow} />
+    </Animated.View>
+  );
+};
+
+// --- ProgressBar Component ---
+const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggle, scrubX, isScrubbing }) => {
+  const [layout, setLayout] = useState({ width: 0, x: 0 });
+  const containerRef = useRef(null);
+
+  const handleTouch = (absoluteX) => {
+    if (layout.width > 0 && duration > 0) {
+      const relativeX = absoluteX - layout.x;
+      const percent = Math.max(0, Math.min(1, relativeX / layout.width));
+      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
+      onSeek(percent * duration, true); // true indicates active scrubbing
     }
   };
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponderCapture: () => true,
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (evt) => {
-        onIsInteracting?.(true);
-        handleTouch(evt);
-      },
-      onPanResponderMove: (evt) => {
-        handleTouch(evt);
-      },
-      onPanResponderRelease: () => {
-        onIsInteracting?.(false);
-      },
-      onPanResponderTerminate: () => {
-        onIsInteracting?.(false);
-      },
-      onPanResponderTerminationRequest: () => false,
+  const gesture = Gesture.Pan()
+    .manualActivation(false)
+    .onStart((e) => {
+      isScrubbing.value = true;
+      runOnJS(onIsInteracting)?.(true);
+      runOnJS(onScrubToggle)?.(true);
+      runOnJS(handleTouch)(e.absoluteX);
     })
-  ).current;
+    .onUpdate((e) => {
+      runOnJS(handleTouch)(e.absoluteX);
+    })
+    .onEnd(() => {
+      isScrubbing.value = false;
+      runOnJS(onIsInteracting)?.(false);
+      runOnJS(onScrubToggle)?.(false);
+    })
+    .onFinalize(() => {
+      isScrubbing.value = false;
+      runOnJS(onIsInteracting)?.(false);
+      runOnJS(onScrubToggle)?.(false);
+    });
+
+  const tapGesture = Gesture.Tap()
+    .onStart((e) => {
+      runOnJS(handleTouch)(e.absoluteX);
+    });
+
+  const composed = Gesture.Simultaneous(gesture, tapGesture);
 
   return (
     <View
+      ref={containerRef}
       style={controlStyles.progressBarContainer}
-      onLayout={(e) => {
-        layoutWidth.current = e.nativeEvent.layout.width;
+      onLayout={() => {
+        if (containerRef.current) {
+          containerRef.current.measure((x, y, width, height, pageX, pageY) => {
+            setLayout({ width, x: pageX });
+          });
+        }
       }}
-      {...panResponder.panHandlers}
     >
-      <View style={{ height: '100%', justifyContent: 'center', width: '100%' }} pointerEvents="none">
-        <View style={{ height: 4, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2, overflow: 'hidden' }}>
-          <View style={[controlStyles.progressBarFill, { width: `${Math.min(100, Math.max(0, progress))}%` }]} />
+      <GestureDetector gesture={composed}>
+        <View style={{ height: '100%', justifyContent: 'center', width: '100%' }}>
+          <View style={{ height: 4, backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 2, overflow: 'hidden' }}>
+            <View style={[controlStyles.progressBarFill, { width: `${Math.min(100, Math.max(0, progress))}%` }]} />
+          </View>
+          {/* Animated Thumb */}
+          <Animated.View
+            style={[
+              controlStyles.progressBarThumb,
+              useAnimatedStyle(() => {
+                const thumbX = isScrubbing.value
+                  ? scrubX.value
+                  : (progress / 100) * layout.width;
+
+                return {
+                  transform: [
+                    { translateX: thumbX },
+                    { scale: withTiming(isScrubbing.value ? 1.5 : 1, { duration: 100 }) }
+                  ],
+                  // Remove 'left' from styles or reset it if needed
+                  left: 0,
+                };
+              })
+            ]}
+          />
         </View>
-      </View>
+      </GestureDetector>
     </View>
   );
 };
 
 const CustomVideoControls = ({
   videoRef, // Use videoRef for expo-av
+  videoUri,
   isPlaying,
   onPlayPause,
   duration,
@@ -132,11 +211,18 @@ const CustomVideoControls = ({
   visible,
   onSeek,
   isLandscape,
-  onIsInteracting
+  onIsInteracting,
+  onScrubToggle,
+  colors
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
+
+  // Scrubbing Shared Values
+  const scrubX = useSharedValue(0);
+  const isScrubbing = useSharedValue(false);
+  const [progressBarWidth, setProgressBarWidth] = useState(0);
   // availableAudioTracks and currentAudioTrack are more complex in expo-av, 
   // we will disable them for now to ensure stability of the main seeking fix.
   const [availableAudioTracks, setAvailableAudioTracks] = useState([]);
@@ -305,13 +391,10 @@ const CustomVideoControls = ({
         </TouchableOpacity>
       </Modal>
 
-      {/* Bottom bar container - consumes taps to prevent toggling controls when tapping near buttons */}
-      <TouchableOpacity
-        activeOpacity={1}
+      {/* Bottom bar container - consumes touches to prevent toggling UI when interacting with controls */}
+      <View
         style={controlStyles.bottomBar}
-        onPress={(e) => {
-          // Consume event
-        }}
+        onStartShouldSetResponder={() => true}
         pointerEvents="auto"
       >
         <TouchableOpacity onPress={onPlayPause} style={controlStyles.smallControlBtn}>
@@ -322,12 +405,28 @@ const CustomVideoControls = ({
           {formatTime(currentTime)} / {formatTime(duration || 0)}
         </Text>
 
-        <ProgressBar
-          progress={progress}
-          onSeek={onSeek}
-          duration={duration || 0}
-          onIsInteracting={onIsInteracting}
-        />
+        <View
+          style={{ flex: 1 }}
+          onLayout={(e) => setProgressBarWidth(e.nativeEvent.layout.width - 24)} // Subtract margins
+        >
+          <ScrubbingPreview
+            videoUri={videoUri}
+            duration={duration || 0}
+            scrubX={scrubX}
+            isScrubbing={isScrubbing}
+            containerWidth={progressBarWidth}
+            colors={colors}
+          />
+          <ProgressBar
+            progress={progress}
+            onSeek={onSeek}
+            duration={duration || 0}
+            onIsInteracting={onIsInteracting}
+            onScrubToggle={onScrubToggle}
+            scrubX={scrubX}
+            isScrubbing={isScrubbing}
+          />
+        </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <TouchableOpacity onPress={() => setShowSettings(true)} style={controlStyles.smallControlBtn}>
@@ -338,32 +437,44 @@ const CustomVideoControls = ({
             <Ionicons name={isLandscape ? "contract-outline" : "scan-outline"} size={24} color="white" />
           </TouchableOpacity>
         </View>
-      </TouchableOpacity>
+      </View>
     </View>
   );
 };
 
 // --- Video Content Component ---
 const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
+  const { colors } = useTheme();
   const [videoUri, setVideoUri] = useState(null);
   const [isReady, setIsReady] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasInteracted, setHasInteracted] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(videoStates?.current?.[mediaItem.id]?.isPlaying || false);
+  const [hasInteracted, setHasInteracted] = useState(!!videoStates?.current?.[mediaItem.id] || false);
   const [isInteracting, setIsInteracting] = useState(false);
-  const [shouldShowVideo, setShouldShowVideo] = useState(false); // NEW: Controls VideoView mounting
+  const [shouldShowVideo, setShouldShowVideo] = useState(!!videoStates?.current?.[mediaItem.id] || false); // Initialize true if cached
   const { showAlert } = useDialog();
 
   // expo-av Video Reference
   const videoRef = useRef(null);
 
+  // Initialize from cache if available (for rotation persistence)
+  const cachedState = videoStates?.current?.[mediaItem.id];
+
   // Custom Control State
-  const [currentTime, setCurrentTime] = useState(0);
+  const [currentTime, setCurrentTime] = useState(cachedState?.currentTime || 0);
   const [duration, setDuration] = useState(0);
   const [videoDims, setVideoDims] = useState({
     width: mediaItem.width || 0,
     height: mediaItem.height || 0
   });
+
+  // Track if we've already restored the position for this mount
+  const hasRestoredRef = useRef(false);
+  const isRestoringRef = useRef(false);
+
+  // Track playback status for scrubbing and restoration
+  const wasPlayingBeforeScrubRef = useRef(false);
+  const isScrubbingRef = useRef(false);
 
   // Apply player settings in a stable effect
   useEffect(() => {
@@ -387,8 +498,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
-  const isRestoringRef = useRef(false);
-  const hasRestoredRef = useRef(false);
+
   // Clean up on unmount or ID change
   useEffect(() => {
     return () => {
@@ -548,11 +658,27 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     }
 
     // Sync position and duration
-    // expo-av uses milliseconds, convert to seconds for existing UI compatibility if needed
-    // Actually, the user's request example said: "positionMillis" and "durationMillis"
-    // I will convert to seconds to keep the rest of the UI (CustomVideoControls) working as is.
     const posSeconds = status.positionMillis / 1000;
     const durSeconds = status.durationMillis / 1000;
+
+    // RESTORATION LOGIC: If we have a cached time and haven't restored yet, seek now.
+    const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
+    if (status.isLoaded && !hasRestoredRef.current && cachedTime > 0.1) {
+      console.log('VideoContent: Restoring playback position to', cachedTime);
+      hasRestoredRef.current = true;
+      isRestoringRef.current = true;
+      videoRef.current?.setPositionAsync(cachedTime * 1000).then(() => {
+        isRestoringRef.current = false;
+        // If it was playing before, ensure it continues
+        if (videoStates.current[mediaItem.id]?.isPlaying) {
+          videoRef.current?.playAsync();
+        }
+      });
+      return; // Skip state update during seek trigger to avoid UI jitter
+    }
+
+    // Skip updates if we are in the middle of a restoration seek
+    if (isRestoringRef.current) return;
 
     setCurrentTime(posSeconds);
     if (durSeconds > 0) {
@@ -636,13 +762,43 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     }
   };
 
-  const handleSeek = async (timeInSeconds) => {
+  const handleSeek = async (timeInSeconds, isScrubbing = false) => {
     if (videoRef.current) {
       try {
-        await videoRef.current.setPositionAsync(timeInSeconds * 1000);
+        // Continuous seek during scrubbing uses zero tolerances for precise frame updates
+        if (isScrubbing) {
+          await videoRef.current.setPositionAsync(timeInSeconds * 1000, {
+            toleranceBeforeMillis: 0,
+            toleranceAfterMillis: 0
+          });
+        } else {
+          await videoRef.current.setPositionAsync(timeInSeconds * 1000);
+        }
       } catch (e) {
         console.warn('ViewerScreen: Seek failed', e);
       }
+    }
+  };
+
+  const handleScrubToggle = async (isScrubbing) => {
+    if (!videoRef.current) return;
+    isScrubbingRef.current = isScrubbing;
+
+    try {
+      if (isScrubbing) {
+        const status = await videoRef.current.getStatusAsync();
+        wasPlayingBeforeScrubRef.current = status.isLoaded && status.isPlaying;
+        if (wasPlayingBeforeScrubRef.current) {
+          await videoRef.current.pauseAsync();
+        }
+      } else {
+        // Resume if it was playing before scrubbing started
+        if (wasPlayingBeforeScrubRef.current) {
+          await videoRef.current.playAsync();
+        }
+      }
+    } catch (e) {
+      console.warn('ViewerScreen: Scrub toggle failed', e);
     }
   };
 
@@ -781,6 +937,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           {/* Video Bottom Controls */}
           <CustomVideoControls
             videoRef={videoRef}
+            videoUri={videoUri}
             isPlaying={isPlaying}
             onPlayPause={togglePlay}
             duration={duration}
@@ -790,6 +947,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
             onSeek={handleSeek}
             isLandscape={dimensions.width > dimensions.height}
             onIsInteracting={setIsInteracting}
+            onScrubToggle={handleScrubToggle}
+            colors={colors}
           />
         </Animated.View>
       )}
@@ -1416,5 +1575,67 @@ const controlStyles = StyleSheet.create({
     color: '#007AFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  // Scrubbing Preview
+  previewContainer: {
+    position: 'absolute',
+    width: 120,
+    height: 80,
+    bottom: 60, // Positioned above the progress bar container
+    zIndex: 1000,
+    pointerEvents: 'none',
+  },
+  previewContent: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+    borderWidth: 2,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  previewVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  previewTimeOverlay: {
+    position: 'absolute',
+    bottom: 4,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingVertical: 2,
+  },
+  previewTimeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  previewArrow: {
+    position: 'absolute',
+    bottom: -6,
+    left: 60 - 6,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 6,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: 'rgba(255,255,255,0.3)',
+  },
+  progressBarThumb: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#fff',
+    top: '50%',
+    marginTop: -6,
+    marginLeft: -6,
   },
 });
