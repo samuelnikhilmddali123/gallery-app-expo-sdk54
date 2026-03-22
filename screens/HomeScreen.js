@@ -325,8 +325,8 @@ export default function HomeScreen({ navigation, route }) {
           // Fetch only the latest 10 items to minimize performance impact
           const result = await MediaLibrary.getAssetsAsync({
             first: 10,
-            sortBy: [MediaLibrary.SortBy.creationTime], // Strict chronological
-            mediaType: MediaLibrary.MediaType.all,
+            sortBy: [[MediaLibrary.SortBy.creationTime, false]], // Correct format: [Property, order]
+            mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
           });
 
           const latestAssets = result.assets;

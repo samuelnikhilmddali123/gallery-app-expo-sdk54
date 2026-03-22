@@ -207,11 +207,15 @@ export default function CalendarScreen({ navigation }) {
           <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 20 }} />
         ) : (
           <View style={styles.photoGrid}>
-            {dayPhotos.map((item) => (
-              <TouchableOpacity 
-                key={item.id} 
+            {dayPhotos.map((item, index) => (
+              <TouchableOpacity
+                key={item.id}
                 style={styles.photoItem}
-                onPress={() => navigation.navigate('Viewer', { item, allItems: dayPhotos })}
+                onPress={() => navigation.navigate('Viewer', {
+                  item,
+                  allItems: dayPhotos,
+                  initialIndex: index
+                })}
               >
                 <Image source={{ uri: item.uri }} style={styles.gridImage} contentFit="cover" />
               </TouchableOpacity>

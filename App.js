@@ -1,5 +1,4 @@
 import 'react-native-gesture-handler';
-
 import React from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -12,7 +11,9 @@ import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { SearchProvider } from './contexts/SearchContext';
 import { VaultProvider, useVault } from './contexts/VaultContext';
 import { DialogProvider } from './contexts/DialogContext';
+import { AIProvider } from './contexts/AIContext';
 import { Ionicons } from '@expo/vector-icons';
+import * as ScreenOrientation from 'expo-screen-orientation';
 
 import HomeScreen from './screens/HomeScreen';
 import AlbumsScreen from './screens/AlbumsScreen';
@@ -30,8 +31,6 @@ import ForgotVaultPasswordScreen from './screens/ForgotVaultPasswordScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import CalendarScreen from './screens/CalendarScreen';
 import SmartAlbumsScreen from './screens/SmartAlbumsScreen';
-import ChatListScreen from './screens/ChatListScreen';
-import ChatScreen from './screens/ChatScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -46,20 +45,14 @@ function MainTabs() {
         headerShown: false,
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
-
           if (focused) {
             if (route.name === 'Home') iconName = 'home';
-            else if (route.name === 'ChatTab') iconName = 'chatbubble';
             else if (route.name === 'Profile') iconName = 'person';
           } else {
             if (route.name === 'Home') iconName = 'home-outline';
-            else if (route.name === 'ChatTab') iconName = 'chatbubble-outline';
             else if (route.name === 'Profile') iconName = 'person-outline';
           }
-
-          return (
-            <Ionicons name={iconName} size={size} color={color} />
-          );
+          return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textSecondary,
@@ -77,7 +70,6 @@ function MainTabs() {
     >
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
-      <Tab.Screen name="ChatTab" component={ChatListScreen} />
     </Tab.Navigator>
   );
 }
@@ -86,7 +78,6 @@ function AppNavigator() {
   const { isDarkMode } = useTheme();
   const { isVaultSetup, isVaultUnlocked, unlockVault, isLoading } = useVault();
 
-  // Show loading screen only if vault status is still loading
   if (isLoading) {
     return (
       <View style={{ flex: 1, backgroundColor: isDarkMode ? '#000' : '#fff', justifyContent: 'center', alignItems: 'center' }}>
@@ -99,132 +90,26 @@ function AppNavigator() {
   return (
     <NavigationContainer>
       <StatusBar style={isDarkMode ? "light" : "dark"} backgroundColor={isDarkMode ? "#000000" : "#ffffff"} />
-      <Stack.Navigator
-        screenOptions={{ headerShown: false }}
-        initialRouteName="MainTabs"
-      >
+      <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="MainTabs">
         <Stack.Screen name="MainTabs" component={MainTabs} />
-        <Stack.Screen
-          name="Calendar"
-          component={CalendarScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="Chat"
-          component={ChatScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="Albums"
-          component={AlbumsScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="Folders"
-          component={FoldersScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="SmartAlbums"
-          component={SmartAlbumsScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="Settings"
-          component={SettingsScreen}
-          options={{
-            animation: 'slide_from_right'
-          }}
-        />
-        <Stack.Screen
-          name="VaultPassword"
-          component={VaultPasswordScreen}
-          options={{
-            animation: 'slide_from_bottom',
-            presentation: 'modal',
-          }}
-        />
-        <Stack.Screen
-          name="AlbumView"
-          component={AlbumViewScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="FolderDetail"
-          component={FolderDetailScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="Viewer"
-          component={ViewerScreen}
-          options={{
-            animation: 'fade',
-            contentStyle: { backgroundColor: '#000', flex: 1 },
-            gestureEnabled: true,
-            headerShown: false,
-            statusBarHidden: true,
-          }}
-        />
-        <Stack.Screen
-          name="EditPhoto"
-          component={EditPhotoScreen}
-          options={{
-            animation: 'slide_from_bottom',
-            gestureEnabled: true,
-          }}
-        />
+        <Stack.Screen name="Calendar" component={CalendarScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
+        <Stack.Screen name="Albums" component={AlbumsScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
+        <Stack.Screen name="Folders" component={FoldersScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
+        <Stack.Screen name="SmartAlbums" component={SmartAlbumsScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
+        <Stack.Screen name="Settings" component={SettingsScreen} options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="VaultPassword" component={VaultPasswordScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
+        <Stack.Screen name="AlbumView" component={AlbumViewScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
+        <Stack.Screen name="FolderDetail" component={FolderDetailScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
+        <Stack.Screen name="Viewer" component={ViewerScreen} options={{ animation: 'fade', contentStyle: { backgroundColor: '#000', flex: 1 }, gestureEnabled: true, headerShown: false, statusBarHidden: true }} />
+        <Stack.Screen name="EditPhoto" component={EditPhotoScreen} options={{ animation: 'slide_from_bottom', gestureEnabled: true }} />
         <Stack.Screen name="Trash" component={TrashScreen} />
-        <Stack.Screen
-          name="VaultHome"
-          component={VaultScreen}
-          options={{
-            animation: 'slide_from_right',
-            gestureEnabled: true,
-          }}
-        />
-        <Stack.Screen
-          name="VaultSetup"
-          component={VaultSetupScreen}
-          options={{
-            animation: 'slide_from_bottom',
-            presentation: 'modal',
-          }}
-        />
-        <Stack.Screen
-          name="ForgotVaultPassword"
-          component={ForgotVaultPasswordScreen}
-          options={{
-            animation: 'slide_from_bottom',
-            presentation: 'modal',
-          }}
-        />
+        <Stack.Screen name="VaultHome" component={VaultScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
+        <Stack.Screen name="VaultSetup" component={VaultSetupScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
+        <Stack.Screen name="ForgotVaultPassword" component={ForgotVaultPasswordScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );
 }
-
-import * as ScreenOrientation from 'expo-screen-orientation';
 
 export default function App() {
   React.useEffect(() => {
@@ -234,13 +119,15 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
-        <SearchProvider>
-          <DialogProvider>
-            <VaultProvider>
-              <AppNavigator />
-            </VaultProvider>
-          </DialogProvider>
-        </SearchProvider>
+        <AIProvider>
+          <SearchProvider>
+            <DialogProvider>
+              <VaultProvider>
+                <AppNavigator />
+              </VaultProvider>
+            </DialogProvider>
+          </SearchProvider>
+        </AIProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
   );

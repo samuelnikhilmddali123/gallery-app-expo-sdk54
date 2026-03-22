@@ -73,101 +73,37 @@ function ProgressBar({ currentTime, duration, onSeek, onIsInteracting }) {
 export default function CustomVideoControls({
     player,
     visible,
-    onToggleControls,
-    onRequestFullscreen,
-    onIsInteracting
+    isPlaying,
+    currentTime,
+    duration,
+    onPlayPause,
+    onSeek,
+    onToggleFullscreen,
+    onIsInteracting,
+    availableAudioTracks = [],
+    currentAudioTrack = null,
+    onAudioSelect
 }) {
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [currentTime, setCurrentTime] = useState(0);
-    const [duration, setDuration] = useState(0);
-    const [audioTracks, setAudioTracks] = useState([]);
-    const [currentAudioTrack, setCurrentAudioTrack] = useState(null);
     const [showAudioMenu, setShowAudioMenu] = useState(false);
 
-    // Listen to player state changes
-    useEffect(() => {
-        if (!player) return;
-
-        const playingSubscription = player.addListener('playingChange', (newIsPlaying) => {
-            setIsPlaying(newIsPlaying);
-        });
-
-        const playbackSubscription = player.addListener('playbackStateChange', (e) => {
-            if (e.playbackState === 'finished') {
-                setIsPlaying(false);
-            }
-        });
-
-        const timeSubscription = player.addListener('timeUpdate', (newTime) => {
-            setCurrentTime(newTime.currentTime);
-            setDuration(newTime.duration || 0);
-        });
-
-        return () => {
-            playingSubscription?.remove();
-            playbackSubscription?.remove();
-            timeSubscription?.remove();
-        };
-    }, [player]);
-
-    // Get audio tracks
-    useEffect(() => {
-        if (!player) return;
-
-        try {
-            // Get available audio tracks from player
-            const tracks = player.availableAudioMixingModes || [];
-            setAudioTracks(tracks);
-
-            // Get current track
-            const current = player.currentAudioMixingMode;
-            setCurrentAudioTrack(current);
-        } catch (error) {
-            console.log('Audio tracks not available:', error);
-        }
-    }, [player]);
-
     const handlePlayPause = useCallback(() => {
-        if (!player || player.status !== 'readyToPlay') return;
-
-        try {
-            const isFinished = player.playbackState === 'finished';
-
-            if (isFinished) {
-                player.currentTime = 0;
-                player.play();
-            } else {
-                if (isPlaying) {
-                    player.pause();
-                } else {
-                    player.play();
-                }
-            }
-        } catch (error) {
-            console.log('Failed to toggle play/pause:', error);
+        if (onPlayPause) {
+            onPlayPause();
         }
-    }, [player, isPlaying]);
+    }, [onPlayPause]);
 
     const handleSeek = useCallback((value) => {
-        if (!player || player.status !== 'readyToPlay') return;
-        try {
-            player.currentTime = value;
-        } catch (error) {
-            console.log('Failed to seek:', error);
+        if (onSeek) {
+            onSeek(value);
         }
-    }, [player]);
+    }, [onSeek]);
 
     const handleAudioTrackSelect = useCallback((track) => {
-        if (!player) return;
-
-        try {
-            player.currentAudioMixingMode = track;
-            setCurrentAudioTrack(track);
+        if (onAudioSelect) {
+            onAudioSelect(track);
             setShowAudioMenu(false);
-        } catch (error) {
-            console.log('Failed to change audio track:', error);
         }
-    }, [player]);
+    }, [onAudioSelect]);
 
     const formatTime = (seconds) => {
         if (!seconds || isNaN(seconds)) return '0:00';
@@ -187,7 +123,7 @@ export default function CustomVideoControls({
             {/* Top Controls */}
             <View style={styles.topControls}>
                 <TouchableOpacity
-                    onPress={onRequestFullscreen}
+                    onPress={onToggleFullscreen}
                     style={styles.controlButton}
                 >
                     <Ionicons name="expand" size={24} color="#fff" />
@@ -225,7 +161,7 @@ export default function CustomVideoControls({
                 {/* Control Buttons */}
                 <View style={styles.controlsRow}>
                     {/* Audio/Language Button */}
-                    {audioTracks.length > 0 && (
+                    {availableAudioTracks.length > 0 && (
                         <TouchableOpacity
                             onPress={() => setShowAudioMenu(true)}
                             style={styles.controlButton}
@@ -254,7 +190,7 @@ export default function CustomVideoControls({
                     >
                         <Text style={styles.menuTitle}>Audio Track</Text>
                         <ScrollView>
-                            {audioTracks.map((track, index) => (
+                            {availableAudioTracks.map((track, index) => (
                                 <TouchableOpacity
                                     key={index}
                                     style={[

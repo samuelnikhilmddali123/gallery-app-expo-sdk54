@@ -8,7 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useTheme } from '../contexts/ThemeContext';
-import { scanGalleryWithAI, loadCachedAIResults, clearAICache, CATEGORY_RULES, isAIAvailable } from '../services/aiService';
+import { useAI } from '../contexts/AIContext';
+import { CATEGORY_RULES } from '../services/aiService';
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle, 
@@ -70,154 +71,81 @@ const FloatingPhoto = ({ uri, onComplete }) => {
 
 export default function SmartAlbumsScreen({ navigation }) {
   const { colors } = useTheme();
-  const [isScanning, setIsScanning] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [smartAlbums, setSmartAlbums] = useState(null);
+  const { isAnalyzing, progress, lastScannedUri, results, scannedAt, isSupported, startScan, clearResults } = useAI();
   const [mediaMap, setMediaMap] = useState({});
   const [activeTab, setActiveTab] = useState('goodPics');
-  const [cachedAt, setCachedAt] = useState(null);
-  const [isSupported, setIsSupported] = useState(true);
-  const [scanStream, setScanStream] = useState([]); // For smoke animation
-  const maxSmokeItems = 12; // Performance limit
+  const [fullMediaItems, setFullMediaItems] = useState([]); // Array of full asset objects for viewer
+  const [scanStream, setScanStream] = useState([]); // Local store for floating items
+  const maxSmokeItems = 12;
 
+  // React to background scan stream for smoke animation
   useEffect(() => {
-    checkSupport();
-    loadCache();
-  }, []);
-
-  const checkSupport = async () => {
-    const available = await isAIAvailable();
-    setIsSupported(available);
-  };
-
-  const loadCache = async () => {
-    const cached = await loadCachedAIResults();
-    if (cached) {
-      setSmartAlbums(cached.results);
-      setCachedAt(cached.scannedAt);
-      fetchMediaForIds(Object.values(cached.results).flat());
-    }
-  };
-
-  const fetchMediaForIds = async (ids) => {
-    if (!ids.length) return;
-    const map = {};
-    for (const id of ids) {
-      try {
-        const asset = await MediaLibrary.getAssetInfoAsync(id);
-        if (asset) map[id] = asset.localUri || asset.uri;
-      } catch {}
-    }
-    setMediaMap(prev => ({ ...prev, ...map }));
-  };
-
-  const startScan = async () => {
-    setIsScanning(true);
-    setProgress({ current: 0, total: 0 });
-
-    const available = await isAIAvailable();
-    if (!available) {
-      Alert.alert(
-        '🚀 Rebuild Required',
-        'Your AI Smart Albums feature needs to be linked to your app. Please run:\n\nnpx expo run:android\n\n(or recreate your development build) to enable on-device AI.',
-        [{ text: 'OK' }]
-      );
-      setIsScanning(false);
-      setIsSupported(false);
-      return;
-    }
-
-    try {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission denied', 'Please allow media access to scan photos.');
-        setIsScanning(false);
-        return;
-      }
-
-      // Fetch ALL photos from the library
-      let allAssets = [];
-      let hasNextPage = true;
-      let after = null;
-
-      while (hasNextPage) {
-        const result = await MediaLibrary.getAssetsAsync({
-          mediaType: 'photo',
-          first: 1000, // Batch size
-          after: after,
-          sortBy: MediaLibrary.SortBy.modificationTime,
+    if (isAnalyzing && lastScannedUri) {
+        setScanStream(prev => {
+            const newItem = { id: `${Date.now()}_${Math.random()}`, uri: lastScannedUri };
+            return [...prev.slice(-maxSmokeItems), newItem];
         });
-        allAssets = [...allAssets, ...result.assets];
-        hasNextPage = result.hasNextPage;
-        after = result.endCursor;
-        
-        // Safety break if gallery is unusually huge, but let's allow up to 10k for now
-        if (allAssets.length >= 10000) break;
-      }
-
-      const uriLookup = {};
-      allAssets.forEach(a => uriLookup[a.id] = a.uri);
-
-      const results = await scanGalleryWithAI(
-        allAssets.map(a => ({ id: a.id, uri: a.uri })),
-        (current, total, category, id) => {
-          setProgress({ current, total });
-          if (uriLookup[id]) {
-            setScanStream(prev => {
-              const newItem = { id: `${id}_${Date.now()}`, uri: uriLookup[id] };
-              return [...prev.slice(-maxSmokeItems), newItem];
-            });
-          }
-        }
-      );
-
-      setSmartAlbums(results);
-      setCachedAt(Date.now());
-      await fetchMediaForIds(Object.values(results).flat());
-
-    } catch (e) {
-      Alert.alert('Scan failed', e.message);
     }
+  }, [isAnalyzing, lastScannedUri]);
 
-    setIsScanning(false);
-  };
+  // Load media items whenever results change or tab changes
+  useEffect(() => {
+    if (results) {
+        fetchMediaForTab(activeTab);
+    }
+  }, [results, activeTab]);
 
-  const handleClearCache = () => {
-    Alert.alert('Clear AI Results', 'Remove all AI scan results and start fresh?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear', style: 'destructive',
-        onPress: async () => {
-          await clearAICache();
-          setSmartAlbums(null);
-          setMediaMap({});
-          setCachedAt(null);
+  const fetchMediaForTab = async (tab) => {
+    const ids = results[tab] || [];
+    if (!ids.length) {
+        setFullMediaItems([]);
+        return;
+    }
+    
+    const assets = [];
+    const map = {};
+    
+    // Batch fetch assets to get full metadata (width, height, duration etc)
+    // We do it in chunks to avoid blocking bread
+    const CHUNK_SIZE = 50;
+    const items = ids.slice(0, 200); // Limit total shown in grid for performance
+    
+    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+        const chunk = items.slice(i, i + CHUNK_SIZE);
+        try {
+            const result = await MediaLibrary.getAssetsAsync({
+                ids: chunk,
+            });
+            assets.push(...result.assets);
+            result.assets.forEach(a => {
+                map[a.id] = a.uri;
+            });
+        } catch (e) {
+            console.warn('SmartAlbums: Chunk fetch failed', e);
         }
-      }
-    ]);
+    }
+    
+    setMediaMap(prev => ({ ...prev, ...map }));
+    setFullMediaItems(assets);
   };
 
   const tabs = Object.entries(CATEGORY_RULES).map(([key, val]) => ({
     key, label: val.title, icon: val.icon, color: val.color,
-    count: smartAlbums?.[key]?.length || 0,
+    count: results?.[key]?.length || 0,
   }));
 
-  const activeIds = smartAlbums?.[activeTab] || [];
-
-  const renderPhoto = ({ item: id }) => (
+  const renderPhoto = ({ item, index }) => (
     <TouchableOpacity
       style={[styles.thumb, { backgroundColor: colors.border }]}
       onPress={() => {
-        if (mediaMap[id]) {
-          // Navigate to viewer if available
-        }
+          navigation.navigate('Viewer', {
+              item,
+              allItems: fullMediaItems,
+              initialIndex: index
+          });
       }}
     >
-      {mediaMap[id] ? (
-        <Image source={{ uri: mediaMap[id] }} style={styles.thumbImage} contentFit="cover" />
-      ) : (
-        <ActivityIndicator size="small" color={colors.primary} />
-      )}
+      <Image source={{ uri: item.uri }} style={styles.thumbImage} contentFit="cover" transition={100} />
     </TouchableOpacity>
   );
 
@@ -230,21 +158,26 @@ export default function SmartAlbumsScreen({ navigation }) {
         </TouchableOpacity>
         <View>
           <Text style={[styles.headerTitle, { color: colors.text }]}>AI Smart Albums</Text>
-          {cachedAt && (
+          {scannedAt && (
             <Text style={[styles.headerSub, { color: colors.textSecondary }]}>
-              Last scanned {Math.round((Date.now() - cachedAt) / 60000)}m ago
+              Last scanned {Math.round((Date.now() - scannedAt) / 60000)}m ago
             </Text>
           )}
         </View>
-        {smartAlbums && (
-          <TouchableOpacity onPress={handleClearCache} style={styles.backBtn}>
+        {results && (
+          <TouchableOpacity onPress={() => {
+              Alert.alert('Clear AI Results', 'Remove all AI scan results and start fresh?', [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Clear', style: 'destructive', onPress: clearResults }
+              ]);
+          }} style={styles.backBtn}>
             <Ionicons name="trash-outline" size={22} color={colors.textSecondary} />
           </TouchableOpacity>
         )}
       </View>
 
       {/* Scan Button Area */}
-      {!smartAlbums && !isScanning && (
+      {!results && !isAnalyzing && (
         <View style={styles.scanPrompt}>
           <View style={[styles.aiIconCircle, { backgroundColor: colors.accent }]}>
             <Ionicons name="sparkles" size={48} color={colors.primary} />
@@ -274,7 +207,7 @@ export default function SmartAlbumsScreen({ navigation }) {
       )}
 
       {/* Scanning Progress */}
-      {isScanning && (
+      {isAnalyzing && (
         <View style={styles.scanningOverlay}>
           {/* Floating Smoke Items */}
           <View style={styles.smokeContainer} pointerEvents="none">
@@ -292,7 +225,7 @@ export default function SmartAlbumsScreen({ navigation }) {
             <Text style={[styles.scanDesc, { color: colors.textSecondary }]}>
               Finding your best moments • {progress.current}/{progress.total}
             </Text>
-            <Text style={[styles.smokeHint, { color: colors.primary }]}>Your photos are floating up like magic ✨</Text>
+            <Text style={[styles.smokeHint, { color: colors.primary }]}>Analysis continues even if you close this screen ✨</Text>
             
             <View style={[styles.progressBarFull, { backgroundColor: colors.border }]}>
               <View style={[styles.progressFill, {
@@ -305,7 +238,7 @@ export default function SmartAlbumsScreen({ navigation }) {
       )}
 
       {/* Results */}
-      {smartAlbums && !isScanning && (
+      {results && !isAnalyzing && (
         <>
           {/* Category Tabs */}
           <ScrollView
@@ -344,7 +277,7 @@ export default function SmartAlbumsScreen({ navigation }) {
           </ScrollView>
 
           {/* Photos Grid */}
-          {activeIds.length === 0 ? (
+          {fullMediaItems.length === 0 ? (
             <View style={styles.emptyResult}>
               <Ionicons name="image-outline" size={50} color={colors.border} />
               <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
@@ -353,8 +286,8 @@ export default function SmartAlbumsScreen({ navigation }) {
             </View>
           ) : (
             <FlatList
-              data={activeIds}
-              keyExtractor={id => id}
+              data={fullMediaItems}
+              keyExtractor={item => item.id}
               numColumns={3}
               renderItem={renderPhoto}
               contentContainerStyle={styles.grid}
@@ -363,13 +296,15 @@ export default function SmartAlbumsScreen({ navigation }) {
           )}
 
           {/* Rescan Button */}
-          <TouchableOpacity
-            style={[styles.rescanButton, { borderColor: colors.primary }]}
-            onPress={startScan}
-          >
-            <Ionicons name="refresh" size={16} color={colors.primary} />
-            <Text style={[styles.rescanText, { color: colors.primary }]}>Rescan Photos</Text>
-          </TouchableOpacity>
+          <View style={styles.footer}>
+            <TouchableOpacity
+                style={[styles.rescanButton, { borderColor: colors.primary }]}
+                onPress={startScan}
+            >
+                <Ionicons name="refresh" size={16} color={colors.primary} />
+                <Text style={[styles.rescanText, { color: colors.primary }]}>Rescan Photos</Text>
+            </TouchableOpacity>
+          </View>
         </>
       )}
     </SafeAreaView>
@@ -430,14 +365,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   infoText: { fontSize: 12, flex: 1, lineHeight: 18 },
-  progressBar: {
-    width: '100%',
-    height: 8,
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginTop: 8,
-  },
-  progressFill: { height: '100%', borderRadius: 4 },
   tabsScroll: { flexGrow: 0, marginTop: 8 },
   tabs: { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },
   tab: {
@@ -477,32 +404,41 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   emptyText: { fontSize: 15, textAlign: 'center' },
+  footer: {
+      paddingBottom: 16
+  },
   rescanButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    margin: 16,
+    marginHorizontal: 16,
     padding: 14,
     borderRadius: 20,
     borderWidth: 1.5,
   },
   rescanText: { fontSize: 15, fontWeight: '600' },
-  // --- Smoke Animation Styles ---
   scanningOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(255,255,255,0.95)',
     zIndex: 100,
   },
-  smokeContainer: {
-    position: 'absolute',
-    bottom: 50,
-    left: 0,
-    right: 0,
-    height: SCREEN_HEIGHT,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
+  smokeHint: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    marginTop: 10,
+    fontStyle: 'italic',
+    opacity: 0.8,
+    textAlign: 'center'
   },
+  progressBarFull: {
+    width: '100%',
+    height: 10,
+    borderRadius: 5,
+    overflow: 'hidden',
+    marginTop: 20,
+  },
+  progressFill: { height: '100%', borderRadius: 4 },
   floatingPhoto: {
     position: 'absolute',
     width: 60,
@@ -518,19 +454,14 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     overflow: 'hidden',
   },
+  smokeContainer: {
+    position: 'absolute',
+    bottom: 50,
+    left: 0,
+    right: 0,
+    height: SCREEN_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
   smokeImage: { width: '100%', height: '100%' },
-  smokeHint: { 
-    fontSize: 14, 
-    fontWeight: '600', 
-    marginTop: 10,
-    fontStyle: 'italic',
-    opacity: 0.8
-  },
-  progressBarFull: {
-    width: '100%',
-    height: 10,
-    borderRadius: 5,
-    overflow: 'hidden',
-    marginTop: 20,
-  },
 });
