@@ -73,6 +73,10 @@ const callApi = async (action, payload) => {
     }
 };
 
+export const claimUsername = async (name) => {
+    return await callApi('CLAIM_USERNAME', { username: name });
+}
+
 export const registerUser = async () => {
     const me = await getMyName();
     return await callApi('REGISTER', { username: me });

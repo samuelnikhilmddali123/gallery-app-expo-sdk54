@@ -31,20 +31,30 @@ module.exports = async (req, res) => {
     const { action, payload } = req.body;
 
     switch (action) {
-      case 'REGISTER':
-        // Register user name during app startup
-        const { username } = payload;
-        await users.updateOne(
-          { username },
-          { $set: { username, lastSeen: new Date() } },
-          { upsert: true }
-        );
+      case 'CLAIM_USERNAME':
+        // Check if the name is already claimed by someone else
+        const { username: nameToClaim } = payload;
+        const existingUser = await users.findOne({ username: nameToClaim });
+        if (existingUser) {
+           return res.status(409).json({ error: 'Username already exists globally!' });
+        }
+        
+        // If not found, claim it for this session/device
+        await users.insertOne({ 
+          username: nameToClaim, 
+          lastSeen: new Date(),
+          createdAt: new Date()
+        });
         return res.json({ success: true });
 
-      case 'SEARCH_USER':
-        const { q } = payload;
-        const found = await users.findOne({ username: q });
-        return res.json({ exists: !!found });
+      case 'REGISTER':
+        // Update last seen for an existing user
+        const { username: existingName } = payload;
+        await users.updateOne(
+          { username: existingName },
+          { $set: { lastSeen: new Date() } }
+        );
+        return res.json({ success: true });
 
       case 'REQUEST_CHAT':
         // Check if target user exists

@@ -1,4 +1,5 @@
 import React from 'react';
+import { registerUser, claimUsername } from '../services/chatService';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +16,7 @@ export default function ProfileScreen({ navigation }) {
   const [systemFolders, setSystemFolders] = React.useState([]);
   const [profileImage, setProfileImage] = React.useState(null);
   const [profileName, setProfileName] = React.useState('Emily Hawthorne');
+  const [originalName, setOriginalName] = React.useState('Emily Hawthorne');
 
   useFocusEffect(
     React.useCallback(() => {
@@ -28,7 +30,10 @@ export default function ProfileScreen({ navigation }) {
         
         // Persistent Profile Name
         const storedName = await require('@react-native-async-storage/async-storage').default.getItem('gallery_profile_name');
-        if (storedName) setProfileName(storedName);
+        if (storedName) {
+           setProfileName(storedName);
+           setOriginalName(storedName);
+        }
       };
       fetchData();
     }, [])
@@ -88,8 +93,25 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const handleNameSubmit = async () => {
+    if (profileName === originalName) {
+      setIsEditingName(false);
+      return;
+    }
+
+    // Call Global API to verify uniqueness
+    const res = await claimUsername(profileName);
+    
+    if (res.error) {
+       Alert.alert('Name Taken', 'This username is already claimed globally! Please try a unique name.');
+       setProfileName(originalName);
+       setIsEditingName(false);
+       return;
+    }
+
     setIsEditingName(false);
+    setOriginalName(profileName);
     await require('@react-native-async-storage/async-storage').default.setItem('gallery_profile_name', profileName);
+    await registerUser(); // Sync with new unique handle
   };
 
   const albums = [
