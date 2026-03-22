@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform } from 'react-native';
 import { Image } from 'expo-image';
-import { Video, Audio } from 'expo-av'; // Use expo-av for precise seeking control
+import { Video as ExpoAVVideo, Audio } from 'expo-av';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -56,7 +57,9 @@ const getLanguageName = (code) => {
 // --- Scrubbing Preview Component ---
 const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWidth, colors }) => {
   const [previewTime, setPreviewTime] = useState(0);
-  const previewVideoRef = useRef(null);
+  const previewPlayer = useVideoPlayer(videoUri || '', (player) => {
+    player.muted = true;
+  });
   const lastPreviewUpdateRef = useRef(0);
   const previewThrottleMs = 100; // Update preview every 100ms
 
@@ -77,11 +80,8 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
   );
 
   useEffect(() => {
-    if (previewVideoRef.current && isScrubbing.value && previewTime >= 0) {
-      previewVideoRef.current.setPositionAsync(previewTime * 1000, {
-        toleranceBeforeMillis: 0,
-        toleranceAfterMillis: 0
-      });
+    if (previewPlayer && isScrubbing.value) {
+      previewPlayer.seekBy(previewTime - previewPlayer.currentTime);
     }
   }, [previewTime]);
 
@@ -105,13 +105,11 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
   return (
     <Animated.View style={[controlStyles.previewContainer, animatedStyle]}>
       <View style={[controlStyles.previewContent, { borderColor: 'rgba(255,255,255,0.3)', backgroundColor: '#000' }]}>
-        <Video
-          ref={previewVideoRef}
-          source={{ uri: videoUri }}
+        <VideoView
+          player={previewPlayer}
           style={controlStyles.previewVideo}
-          resizeMode="cover"
-          shouldPlay={false}
-          isMuted={true}
+          contentFit="cover"
+          nativeControls={false}
         />
         <View style={controlStyles.previewTimeOverlay}>
           <Text style={controlStyles.previewTimeText}>{formatTime(previewTime)}</Text>
@@ -240,7 +238,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
 };
 
 const CustomVideoControls = ({
-  videoRef, // Use videoRef for expo-av
+  player, // Use expo-video player object
   videoUri,
   isPlaying,
   onPlayPause,
@@ -252,38 +250,30 @@ const CustomVideoControls = ({
   isLandscape,
   onIsInteracting,
   onScrubToggle,
-  colors
+  colors,
+  availableAudioTracks = [],
+  currentAudioTrack = null,
+  onAudioSelect,
+  availableTextTracks = [],
+  currentTextTrack = null,
+  onTextSelect
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [showTextMenu, setShowTextMenu] = useState(false);
 
   // Scrubbing Shared Values
   const scrubX = useSharedValue(0);
   const isScrubbing = useSharedValue(false);
   const [progressBarWidth, setProgressBarWidth] = useState(0);
-  // availableAudioTracks and currentAudioTrack are more complex in expo-av, 
-  // we will disable them for now to ensure stability of the main seeking fix.
-  const [availableAudioTracks, setAvailableAudioTracks] = useState([]);
-  const [currentAudioTrack, setCurrentAudioTrack] = useState(null);
+
   const [currentPlaybackRate, setCurrentPlaybackRate] = useState(1.0);
 
   useEffect(() => {
-    if (!videoRef?.current) return;
-
-    const fetchStatus = async () => {
-      try {
-        const status = await videoRef.current.getStatusAsync();
-        if (status.isLoaded) {
-          setCurrentPlaybackRate(status.rate || 1.0);
-        }
-      } catch (e) {
-        console.warn('CustomVideoControls: Error fetching status', e);
-      }
-    };
-
-    fetchStatus();
-  }, [videoRef, visible]); // Re-fetch when visible
+    if (!player) return;
+    setCurrentPlaybackRate(player.playbackRate);
+  }, [player, visible]); // Sync speed when visible
 
   const formatTime = (timeInSeconds) => {
     if (!timeInSeconds && timeInSeconds !== 0) return '0:00';
@@ -296,22 +286,24 @@ const CustomVideoControls = ({
 
   const speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-  const handleSpeedSelect = async (rate) => {
-    if (videoRef?.current) {
-      try {
-        await videoRef.current.setRateAsync(rate, true);
-        setCurrentPlaybackRate(rate);
-      } catch (e) {
-        console.warn('CustomVideoControls: Error setting rate', e);
-      }
+  const handleSpeedSelect = (rate) => {
+    if (player) {
+      player.playbackRate = rate;
+      setCurrentPlaybackRate(rate);
     }
     setShowSpeedMenu(false);
     setShowSettings(false);
   };
 
-  const handleAudioSelect = (track) => {
-    // expo-av audio track selection is not directly exposed as objects
+  const handleAudioTrackChange = (track) => {
+    onAudioSelect?.(track);
     setShowAudioMenu(false);
+    setShowSettings(false);
+  };
+
+  const handleTextTrackChange = (track) => {
+    onTextSelect?.(track);
+    setShowTextMenu(false);
     setShowSettings(false);
   };
 
@@ -356,6 +348,21 @@ const CustomVideoControls = ({
                 </View>
                 <Text style={controlStyles.menuItemValue}>
                   {getLanguageName(currentAudioTrack?.language)}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {availableTextTracks.length > 0 && (
+              <TouchableOpacity
+                style={controlStyles.menuItem}
+                onPress={() => setShowTextMenu(true)}
+              >
+                <View style={controlStyles.menuItemLeft}>
+                  <Ionicons name="chatbox-ellipses-outline" size={20} color="#fff" />
+                  <Text style={controlStyles.menuItemText}>Captions</Text>
+                </View>
+                <Text style={controlStyles.menuItemValue}>
+                  {currentTextTrack ? getLanguageName(currentTextTrack.language) : 'Off'}
                 </Text>
               </TouchableOpacity>
             )}
@@ -419,10 +426,47 @@ const CustomVideoControls = ({
                 <TouchableOpacity
                   key={idx}
                   style={[controlStyles.menuItem, currentAudioTrack === track && controlStyles.menuItemSelected]}
-                  onPress={() => handleAudioSelect(track)}
+                  onPress={() => handleAudioTrackChange(track)}
                 >
                   <Text style={controlStyles.menuItemText}>{getLanguageName(track.language)}</Text>
                   {currentAudioTrack === track && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Caption Selection Modal */}
+      <Modal
+        visible={showTextMenu}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowTextMenu(false)}
+      >
+        <TouchableOpacity
+          style={controlStyles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowTextMenu(false)}
+        >
+          <View style={controlStyles.menuContainer}>
+            <Text style={controlStyles.menuTitle}>Captions</Text>
+            <ScrollView style={{ maxHeight: 300 }}>
+              <TouchableOpacity
+                style={[controlStyles.menuItem, currentTextTrack === null && controlStyles.menuItemSelected]}
+                onPress={() => handleTextTrackChange(null)}
+              >
+                <Text style={controlStyles.menuItemText}>Off</Text>
+                {currentTextTrack === null && <Ionicons name="checkmark" size={20} color="#007AFF" />}
+              </TouchableOpacity>
+              {availableTextTracks.map((track, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[controlStyles.menuItem, currentTextTrack === track && controlStyles.menuItemSelected]}
+                  onPress={() => handleTextTrackChange(track)}
+                >
+                  <Text style={controlStyles.menuItemText}>{getLanguageName(track.language)}</Text>
+                  {currentTextTrack === track && <Ionicons name="checkmark" size={20} color="#007AFF" />}
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -493,26 +537,20 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const [shouldShowVideo, setShouldShowVideo] = useState(!!videoStates?.current?.[mediaItem.id] || false); // Initialize true if cached
   const { showAlert } = useDialog();
 
-  // expo-av Video Reference
-  const videoRef = useRef(null);
-
   // Initialize from cache if available (for rotation persistence)
   const cachedState = videoStates?.current?.[mediaItem.id];
 
   // Custom Control State
   const [currentTime, setCurrentTime] = useState(cachedState?.currentTime || 0);
   const [duration, setDuration] = useState(0);
+  const hasRestoredRef = useRef(false);
+  const wasPlayingBeforeScrubRef = useRef(false);
   const [videoDims, setVideoDims] = useState({
     width: mediaItem.width || 0,
     height: mediaItem.height || 0
   });
 
-  // Track if we've already restored the position for this mount
-  const hasRestoredRef = useRef(false);
   const isRestoringRef = useRef(false);
-
-  // Track playback status for scrubbing and restoration
-  const wasPlayingBeforeScrubRef = useRef(false);
   const isScrubbingRef = useRef(false);
 
   // Performance optimization: Throttle video seeking during scrubbing
@@ -520,25 +558,103 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const pendingSeekRef = useRef(null);
   const seekThrottleMs = 100; // Seek video every 100ms during scrubbing (10 times/sec)
 
-  // Apply player settings in a stable effect
+  // Resolve Video URI
   useEffect(() => {
-    const setupAudio = async () => {
+    let isMounted = true;
+    const loadUri = async () => {
       try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          interruptionModeIOS: 1, // InterruptionModeIOS.DoNotMix
-          shouldDuckAndroid: true,
-          interruptionModeAndroid: 1, // InterruptionModeAndroid.DoNotMix
-          playThroughEarpieceAndroid: false
-        });
+        if (mediaItem.uri && !mediaItem.id.toString().startsWith('ph_')) {
+          setVideoUri(mediaItem.uri);
+          setIsReady(true);
+        } else {
+          // Resolve for cloud/library assets
+          const assetInfo = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
+          if (isMounted) {
+            if (assetInfo.localUri || assetInfo.uri) {
+              setVideoUri(assetInfo.localUri || assetInfo.uri);
+              setIsReady(true);
+            } else {
+              setLoadError(true);
+            }
+          }
+        }
       } catch (e) {
-        console.warn('VideoContent: Failed to set audio mode', e);
+        console.error("Error determining video URI", e);
+        if (isMounted) setLoadError(true);
       }
     };
-    setupAudio();
-  }, []);
+    loadUri();
+    return () => { isMounted = false; };
+  }, [mediaItem.id]);
+
+  const player = useVideoPlayer(videoUri || '', (player) => {
+    player.loop = true;
+  });
+
+  // Track settings (Audio & Captions) from player object
+  const availableAudioTracks = player?.availableAudioTracks || [];
+  const currentAudioTrack = player?.selectedAudioTrack || null;
+  const availableTextTracks = player?.availableSubtitleTracks || [];
+  const currentTextTrack = player?.selectedSubtitleTrack || null;
+
+  // Sync player state to our local state
+  useEffect(() => {
+    if (!player) return;
+
+    if (isActive) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }, [player, isActive]);
+
+  useEffect(() => {
+    if (!player) return;
+
+    const timeUpdateSub = player.addListener('timeUpdate', (event) => {
+      const pos = event.currentTime;
+      setCurrentTime(pos);
+      if (videoStates?.current?.[mediaItem.id]) {
+        videoStates.current[mediaItem.id].currentTime = pos;
+      }
+    });
+
+    const playingSub = player.addListener('playingChange', (isPlayingNow) => {
+      setIsPlaying(isPlayingNow);
+      if (videoStates?.current?.[mediaItem.id]) {
+        videoStates.current[mediaItem.id].isPlaying = isPlayingNow;
+      }
+    });
+
+    // Handle initial seek if cached
+    const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
+    if (cachedTime > 0.1 && player.duration > 0 && !hasRestoredRef.current) {
+      player.seekBy(cachedTime - player.currentTime);
+      hasRestoredRef.current = true;
+    }
+
+    // Duration is usually available on load
+    if (player.duration > 0) {
+      setDuration(player.duration);
+    }
+
+    return () => {
+      timeUpdateSub.remove();
+      playingSub.remove();
+    };
+  }, [player, videoUri]);
+
+  const handleAudioSelect = (track) => {
+    if (player) {
+      player.setAudioTrack(track);
+    }
+  };
+
+  const handleTextSelect = (track) => {
+    if (player) {
+      player.setSubtitleTrack(track);
+    }
+  };
 
   // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
   const loadedIdRef = useRef(null);
@@ -559,13 +675,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     useCallback(() => {
       const handleAppStateChange = (nextAppState) => {
         if (nextAppState.match(/inactive|background/)) {
-          console.log('VideoContent: App backgrounded, pausing player');
-          try {
-            if (videoRef.current) {
-              videoRef.current.pauseAsync();
-            }
-          } catch (e) {
-            console.log('VideoContent: Pause on background failed', e.message);
+          if (player) {
+            player.pause();
           }
         }
       };
@@ -574,16 +685,8 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
       return () => {
         subscription.remove();
-        console.log('VideoContent: Cleaning up player resources on blur');
-        try {
-          if (videoRef.current) {
-            videoRef.current.unloadAsync();
-          }
-        } catch (e) {
-          console.log('VideoContent: Player cleanup error', e.message);
-        }
       };
-    }, [])
+    }, [player])
   );
 
   // Resolve Video URI
@@ -691,71 +794,9 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   }, [mediaItem.id, videoStates]);
 
 
-  // Handle Playback Status Updates
-  const onPlaybackStatusUpdate = (status) => {
-    if (!status.isLoaded) {
-      if (status.error) {
-        console.error('VideoContent: Playback error', status.error);
-        setLoadError(true);
-      }
-      return;
-    }
+  // Handle Playback Status Updates (Redundant with expo-video event listeners, removed)
 
-    // Sync position and duration
-    const posSeconds = status.positionMillis / 1000;
-    const durSeconds = status.durationMillis / 1000;
-
-    // RESTORATION LOGIC: If we have a cached time and haven't restored yet, seek now.
-    const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
-    if (status.isLoaded && !hasRestoredRef.current && cachedTime > 0.1) {
-      console.log('VideoContent: Restoring playback position to', cachedTime);
-      hasRestoredRef.current = true;
-      isRestoringRef.current = true;
-      videoRef.current?.setPositionAsync(cachedTime * 1000).then(() => {
-        isRestoringRef.current = false;
-        // If it was playing before, ensure it continues
-        if (videoStates.current[mediaItem.id]?.isPlaying) {
-          videoRef.current?.playAsync();
-        }
-      });
-      return; // Skip state update during seek trigger to avoid UI jitter
-    }
-
-    // Skip updates if we are in the middle of a restoration seek
-    if (isRestoringRef.current) return;
-
-    setCurrentTime(posSeconds);
-    if (durSeconds > 0) {
-      setDuration(durSeconds);
-    }
-
-    setIsPlaying(status.isPlaying);
-
-    if (videoStates?.current?.[mediaItem.id]) {
-      videoStates.current[mediaItem.id].isPlaying = status.isPlaying;
-      videoStates.current[mediaItem.id].currentTime = posSeconds;
-      videoStates.current[mediaItem.id].timestamp = Date.now();
-    }
-
-    if (status.didJustFinish) {
-      setIsPlaying(false);
-      setHasInteracted(false);
-    }
-  };
-
-  // Pause when inactive
-  useEffect(() => {
-    const pauseOnInactive = async () => {
-      try {
-        if (!isActive && videoRef.current && isPlaying) {
-          await videoRef.current.pauseAsync();
-        }
-      } catch (e) {
-        console.warn('ViewerScreen: Error pausing background video', e);
-      }
-    };
-    pauseOnInactive();
-  }, [isActive, isPlaying]);
+  // Handle foreground/background via AppState handled in focus effect
 
   // Auto-mount and auto-play when active
   useEffect(() => {
@@ -766,99 +807,49 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     }
   }, [isActive, isReady, videoUri]);
 
-  const togglePlay = async () => {
-    if (!videoRef.current || !videoUri) return;
+  const togglePlay = () => {
+    if (!player) return;
 
-    try {
-      if (!shouldShowVideo) {
-        setShouldShowVideo(true);
-        setHasInteracted(true);
-        return;
-      }
+    if (isPlaying) {
+      player.pause();
+    } else {
+      player.play();
+    }
 
-      const status = await videoRef.current.getStatusAsync();
-      if (!status.isLoaded) return;
-
-      if (status.isPlaying) {
-        await videoRef.current.pauseAsync();
-      } else {
-        if (status.didJustFinish) {
-          await videoRef.current.setPositionAsync(0);
-        }
-        await videoRef.current.playAsync();
-      }
-    } catch (e) {
-      console.error('VideoContent: Error toggling play', e);
+    if (!hasInteracted) {
+      setHasInteracted(true);
     }
   };
 
-  const handleRewind10 = async () => {
-    if (videoRef.current) {
-      const newTime = Math.max(0, (currentTime - 10) * 1000);
-      await videoRef.current.setPositionAsync(newTime);
+  const handleRewind10 = () => {
+    if (player) {
+      player.seekBy(-10);
     }
   };
 
-  const handleForward10 = async () => {
-    if (videoRef.current && duration) {
-      const newTime = Math.min(duration * 1000, (currentTime + 10) * 1000);
-      await videoRef.current.setPositionAsync(newTime);
+  const handleForward10 = () => {
+    if (player && duration) {
+      player.seekBy(10);
     }
   };
 
-  const handleSeek = async (timeInSeconds, isScrubbing = false) => {
-    if (!videoRef.current) return;
-
-    try {
-      const now = Date.now();
-
-      if (isScrubbing) {
-        // PERFORMANCE: Throttle seeks during active scrubbing
-        // Only seek if enough time has passed since last seek
-        if (now - lastSeekTimeRef.current >= seekThrottleMs) {
-          lastSeekTimeRef.current = now;
-          pendingSeekRef.current = null;
-
-          // Use zero tolerances for precise frame updates during scrubbing
-          await videoRef.current.setPositionAsync(timeInSeconds * 1000, {
-            toleranceBeforeMillis: 0,
-            toleranceAfterMillis: 0
-          });
-        } else {
-          // Store the pending seek position to execute later
-          pendingSeekRef.current = timeInSeconds;
-        }
-      } else {
-        // NOT scrubbing: Execute immediately (tap or drag end)
-        lastSeekTimeRef.current = now;
-        await videoRef.current.setPositionAsync(timeInSeconds * 1000);
-      }
-    } catch (e) {
-      console.warn('ViewerScreen: Seek failed', e);
+  const handleSeek = (timeInSeconds, isScrubbing = false) => {
+    if (player) {
+      player.seekBy(timeInSeconds - player.currentTime);
+      setCurrentTime(timeInSeconds);
     }
   };
 
-  const handleScrubToggle = async (isScrubbing) => {
-    if (!videoRef.current) return;
-    isScrubbingRef.current = isScrubbing;
+  const handleScrubToggle = (isScrubbing) => {
+    if (!player) return;
 
     try {
       if (isScrubbing) {
-        const status = await videoRef.current.getStatusAsync();
-        wasPlayingBeforeScrubRef.current = status.isLoaded && status.isPlaying;
-        if (wasPlayingBeforeScrubRef.current) {
-          await videoRef.current.pauseAsync();
-        }
+        wasPlayingBeforeScrubRef.current = isPlaying;
+        player.pause();
       } else {
-        // PERFORMANCE: Execute any pending seek when scrubbing ends
-        if (pendingSeekRef.current !== null) {
-          await videoRef.current.setPositionAsync(pendingSeekRef.current * 1000);
-          pendingSeekRef.current = null;
-        }
-
-        // Resume if it was playing before scrubbing started
         if (wasPlayingBeforeScrubRef.current) {
-          await videoRef.current.playAsync();
+          player.play();
         }
       }
     } catch (e) {
@@ -919,15 +910,11 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     <View style={videoBoxStyle}>
       {/* Background Video Layer - Centered via videoBoxStyle flex */}
       {shouldShowVideo && (
-        <Video
-          ref={videoRef}
-          source={{ uri: videoUri }}
+        <VideoView
+          player={player}
           style={{ width: '100%', height: '100%' }}
-          resizeMode="contain"
-          shouldPlay={isActive}
-          onPlaybackStatusUpdate={onPlaybackStatusUpdate}
-          useNativeControls={false}
-          isLooping={true}
+          contentFit="contain"
+          nativeControls={false}
         />
       )}
 
@@ -1000,7 +987,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           {/* Bottom Controls Layer */}
           {/* Video Bottom Controls */}
           <CustomVideoControls
-            videoRef={videoRef}
+            player={player}
             videoUri={videoUri}
             isPlaying={isPlaying}
             onPlayPause={togglePlay}
@@ -1013,6 +1000,12 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
             onIsInteracting={setIsInteracting}
             onScrubToggle={handleScrubToggle}
             colors={colors}
+            availableAudioTracks={availableAudioTracks}
+            currentAudioTrack={currentAudioTrack}
+            onAudioSelect={handleAudioSelect}
+            availableTextTracks={availableTextTracks}
+            currentTextTrack={currentTextTrack}
+            onTextSelect={handleTextSelect}
           />
         </Animated.View>
       )}
