@@ -29,6 +29,7 @@ import VaultSetupScreen from './screens/VaultSetupScreen';
 import ForgotVaultPasswordScreen from './screens/ForgotVaultPasswordScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import CalendarScreen from './screens/CalendarScreen';
+import SmartAlbumsScreen from './screens/SmartAlbumsScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -118,6 +119,14 @@ function AppNavigator() {
         <Stack.Screen
           name="Folders"
           component={FoldersScreen}
+          options={{
+            animation: 'slide_from_right',
+            gestureEnabled: true,
+          }}
+        />
+        <Stack.Screen
+          name="SmartAlbums"
+          component={SmartAlbumsScreen}
           options={{
             animation: 'slide_from_right',
             gestureEnabled: true,

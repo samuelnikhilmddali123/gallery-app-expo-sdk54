@@ -62,6 +62,24 @@ export default function ProfileScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
+        {/* AI Smart Albums Banner */}
+        <TouchableOpacity
+          style={[styles.aiBanner, { backgroundColor: colors.primary }]}
+          onPress={() => navigation.navigate('SmartAlbums')}
+          activeOpacity={0.85}
+        >
+          <View style={styles.aiBannerLeft}>
+            <View style={styles.aiIconBg}>
+              <Ionicons name="sparkles" size={22} color={colors.primary} />
+            </View>
+            <View>
+              <Text style={styles.aiBannerTitle}>✨ AI Smart Albums</Text>
+              <Text style={styles.aiBannerSub}>Auto-detect Good Pics & Family Pics</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.8)" />
+        </TouchableOpacity>
+
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>My albums</Text>
@@ -175,6 +193,31 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   secondaryButtonText: { fontSize: 15, fontWeight: '600' },
+  aiBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 20,
+    marginTop: 20,
+    padding: 16,
+    borderRadius: 20,
+    elevation: 4,
+    shadowColor: '#7B61FF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  aiBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  aiIconBg: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  aiBannerTitle: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  aiBannerSub: { color: 'rgba(255,255,255,0.75)', fontSize: 12, marginTop: 2 },
   section: { marginTop: 30, paddingHorizontal: 20 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   sectionTitle: { fontSize: 18, fontWeight: '700' },
