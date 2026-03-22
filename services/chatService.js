@@ -73,6 +73,11 @@ const callApi = async (action, payload) => {
     }
 };
 
+export const registerUser = async () => {
+    const me = await getMyName();
+    return await callApi('REGISTER', { username: me });
+}
+
 export const getChats = async () => {
   const me = await getMyName();
   const res = await callApi('GET_CHATS', { user: me });
@@ -83,9 +88,9 @@ export const getChats = async () => {
     return {
         id: other, // Use username as ID for simplicity
         name: other,
-        avatar: null,
-        status: 'online', // Mocked as online for global app
-        lastMessage: 'Encryption Enabled 🔐',
+        status: chat.status, // 'pending' or 'accepted'
+        isReceived: chat.status === 'pending' && chat.requestedBy !== me,
+        lastMessage: chat.status === 'pending' ? 'Chat Request Pending...' : 'Encryption Enabled 🔐',
         time: chat.lastActivity
     };
   });
@@ -120,11 +125,16 @@ export const sendMessage = async (recipient, text) => {
     encryptedText: encrypted 
   });
   
-  if (res.error) throw new Error('Failed to send');
+  if (res.error) throw new Error(res.error || 'Failed to send');
   return { id: res.message._id, text, sender: 'me', timestamp: res.message.createdAt, status: 'sent' };
 };
 
 export const requestChat = async (username) => {
     const me = await getMyName();
     return await callApi('REQUEST_CHAT', { from: me, to: username });
+};
+
+export const acceptChat = async (targetId) => {
+    const me = await getMyName();
+    return await callApi('ACCEPT_CHAT', { chatId: targetId, user: me });
 };

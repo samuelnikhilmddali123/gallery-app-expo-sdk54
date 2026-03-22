@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, Modal, A
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../contexts/ThemeContext';
-import { getChats, requestChat } from '../services/chatService';
+import { getChats, requestChat, registerUser, acceptChat } from '../services/chatService';
 
 export default function ChatListScreen({ navigation }) {
   const { colors } = useTheme();
@@ -15,6 +15,7 @@ export default function ChatListScreen({ navigation }) {
   const [requesting, setRequesting] = React.useState(false);
 
   React.useEffect(() => {
+    registerUser(); // Register current device profile
     const unsub = navigation.addListener('focus', () => {
       fetchChats();
     });
@@ -28,6 +29,11 @@ export default function ChatListScreen({ navigation }) {
     setLoading(false);
   };
 
+  const handleAccept = async (id) => {
+    await acceptChat(id);
+    fetchChats();
+  };
+
   const handleRequest = async () => {
     if (!targetUser.trim()) return;
     setRequesting(true);
@@ -36,37 +42,52 @@ export default function ChatListScreen({ navigation }) {
     if (!res.error) {
       setIsModalVisible(false);
       setTargetUser('');
-      fetchChats(); // Refresh list to show the new chat request
-      setTimeout(() => {
-        navigation.navigate('Chat', { chatId: targetUser, name: targetUser });
-      }, 500);
+      fetchChats();
+      Alert.alert('Request Sent!', `We've sent a global chat request to ${targetUser}. You can chat as soon as they accept!`);
     } else {
-        Alert.alert('Error', 'Failed to connect. Check your internet.');
+        Alert.alert('Error', res.error || 'User not found or connection lost.');
     }
   };
 
-  const renderChatItem = ({ item }) => (
-    <TouchableOpacity 
-      style={styles.chatItem} 
-      onPress={() => navigation.navigate('Chat', { chatId: item.id, name: item.name })}
-    >
-      <View style={[styles.avatar, { backgroundColor: colors.border }]}>
-        <Ionicons name="person" size={24} color={colors.primary} />
-        {item.status === 'online' && <View style={styles.onlineStatus} />}
-      </View>
-      <View style={styles.chatInfo}>
-        <View style={styles.chatHeader}>
-          <Text style={[styles.chatName, { color: colors.text }]}>{item.name}</Text>
-          <Text style={[styles.chatTime, { color: colors.textSecondary }]}>
-            {item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
-          </Text>
+  const renderChatItem = ({ item }) => {
+    const isPendingAndReceived = item.isReceived;
+    const isAccepted = item.status === 'accepted';
+
+    return (
+      <View style={styles.chatItem}>
+        <View style={[styles.avatar, { backgroundColor: colors.border }]}>
+          <Ionicons name="person" size={24} color={isAccepted ? colors.primary : colors.textSecondary} />
+          {isAccepted && <View style={styles.onlineStatus} />}
         </View>
-        <Text style={[styles.lastMessage, { color: colors.textSecondary + 'aa' }]} numberOfLines={1}>
-          {item.lastMessage}
-        </Text>
+        <TouchableOpacity 
+           style={styles.chatInfo} 
+           onPress={() => isAccepted && navigation.navigate('Chat', { chatId: item.id, name: item.name })}
+           disabled={!isAccepted}
+        >
+          <View style={styles.chatHeader}>
+            <Text style={[styles.chatName, { color: colors.text }]}>{item.name}</Text>
+            {isAccepted && (
+              <Text style={[styles.chatTime, { color: colors.textSecondary }]}>
+                {item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+              </Text>
+            )}
+          </View>
+          <Text style={[styles.lastMessage, { color: isAccepted ? colors.textSecondary + 'aa' : colors.primary }]} numberOfLines={1}>
+            {item.lastMessage}
+          </Text>
+        </TouchableOpacity>
+        
+        {isPendingAndReceived && (
+          <TouchableOpacity 
+            style={[styles.acceptBtn, { backgroundColor: colors.primary }]} 
+            onPress={() => handleAccept(item.id)}
+          >
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 12 }}>Accept</Text>
+          </TouchableOpacity>
+        )}
       </View>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
@@ -196,6 +217,13 @@ const styles = StyleSheet.create({
   chatName: { fontSize: 17, fontWeight: '700' },
   chatTime: { fontSize: 12 },
   lastMessage: { fontSize: 14 },
+  acceptBtn: {
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   fab: {
     position: 'absolute',
     bottom: 25,
