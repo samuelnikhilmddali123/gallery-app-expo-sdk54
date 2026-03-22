@@ -4,7 +4,7 @@
  */
 const { MongoClient } = require('mongodb');
 
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb+srv://Vercel-Admin-EFOUR:52sxxM83PIPKobvk@efour.ojwn6t6.mongodb.net/gallery_chat?retryWrites=true&w=majority";
+const MONGODB_URI = process.env.STORAGE_URL || process.env.MONGODB_URI;
 const DB_NAME = 'gallery_chat';
 
 let cachedDb = null;
