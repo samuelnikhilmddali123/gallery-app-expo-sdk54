@@ -1,29 +1,101 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../contexts/ThemeContext';
+import { loadCachedAIResults } from '../services/aiService';
+import { useFocusEffect } from '@react-navigation/native';
+import * as MediaLibrary from 'expo-media-library';
+import { Image } from 'expo-image';
 
 export default function ProfileScreen({ navigation }) {
   const { colors } = useTheme();
+  const [aiResults, setAiResults] = React.useState(null);
+  const [thumbnailMap, setThumbnailMap] = React.useState({});
+  const [systemFolders, setSystemFolders] = React.useState([]);
+  const [profileImage, setProfileImage] = React.useState(null);
+  const [profileName, setProfileName] = React.useState('Emily Hawthorne');
+
+  useFocusEffect(
+    React.useCallback(() => {
+      const fetchData = async () => {
+        const cached = await loadCachedAIResults();
+        if (cached) {
+          setAiResults(cached.results);
+          fetchThumbnails(cached.results);
+        }
+        loadSystemAlbums();
+        
+        // Persistent Profile Name
+        const storedName = await require('@react-native-async-storage/async-storage').default.getItem('gallery_profile_name');
+        if (storedName) setProfileName(storedName);
+      };
+      fetchData();
+    }, [])
+  );
+
+  const loadSystemAlbums = async () => {
+    try {
+      const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
+      const prioritizedNames = ['Screenshots', 'WhatsApp', 'WhatsApp Images', 'Instagram', 'Downloads', 'Facebook', 'Snapchat'];
+      const filtered = albums
+        .filter(a => prioritizedNames.some(p => a.title.toLowerCase().includes(p.toLowerCase())))
+        .sort((a, b) => b.assetCount - a.assetCount)
+        .slice(0, 6);
+      setSystemFolders(filtered);
+    } catch (e) {
+      console.warn('Profile: Failed to load system albums', e);
+    }
+  };
+
+  const fetchThumbnails = async (results) => {
+    const allIds = [...(results.goodPics || []).slice(0, 4), ...(results.familyPics || []).slice(0, 4)];
+    if (!allIds.length) return;
+    const map = {};
+    for (const id of allIds) {
+      if (thumbnailMap[id]) continue;
+      try {
+        const asset = await MediaLibrary.getAssetInfoAsync(id);
+        if (asset) map[id] = asset.localUri || asset.uri;
+      } catch (e) {
+        console.warn('Profile: Failed to load thumbnail', id);
+      }
+    }
+    setThumbnailMap(prev => ({ ...prev, ...map }));
+  };
+
+  const pickImage = async () => {
+    const { status } = await require('expo-image-picker').requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission required', 'Permission to access camera roll is required!');
+      return;
+    }
+    const result = await require('expo-image-picker').launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled) {
+      setProfileImage(result.assets[0].uri);
+    }
+  };
+
+  const [isEditingName, setIsEditingName] = React.useState(false);
+
+  const editName = () => {
+    setIsEditingName(true);
+  };
+
+  const handleNameSubmit = async () => {
+    setIsEditingName(false);
+    await require('@react-native-async-storage/async-storage').default.setItem('gallery_profile_name', profileName);
+  };
 
   const albums = [
-    { id: 1, title: 'Good pics with me', count: 12, images: [1,2,3,4] },
-    { id: 2, title: 'Family pics', count: 8, images: [1,2,3,4] },
+    { id: 1, title: 'Good pics with me', count: aiResults?.goodPics?.length || 0, ids: aiResults?.goodPics?.slice(0, 4) || [], isAI: true },
+    { id: 2, title: 'Family pics', count: aiResults?.familyPics?.length || 0, ids: aiResults?.familyPics?.slice(0, 4) || [], isAI: true },
     { id: 3, title: 'First dance', count: 15, images: [1,2,3,4] },
-  ];
-
-  const memories = [
-    { id: 1, likes: 20 },
-    { id: 2, likes: 55 },
-    { id: 3, likes: 12 },
-    { id: 4, likes: 8 },
-  ];
-
-  const folders = [
-    { id: 1, name: 'Screenshots', count: 156 },
-    { id: 2, name: 'Downloads', count: 42 },
-    { id: 3, name: 'WhatsApp', count: 890 },
   ];
 
   return (
@@ -33,33 +105,52 @@ export default function ProfileScreen({ navigation }) {
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.text }]}>My profile</Text>
-        <TouchableOpacity style={styles.headerButton}>
-          <Ionicons name="person-add-outline" size={24} color={colors.text} />
-        </TouchableOpacity>
+        <View style={styles.headerButton} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.profileSection}>
-          <View style={[styles.avatarContainer, { borderColor: colors.primary }]}>
+          <TouchableOpacity 
+            onPress={pickImage}
+            activeOpacity={0.8}
+            style={[styles.avatarContainer, { borderColor: colors.primary }]}
+          >
             <View style={[styles.avatar, { backgroundColor: colors.border }]}>
-               <Ionicons name="person" size={50} color={colors.primary} />
+               {profileImage ? (
+                 <Image source={{ uri: profileImage }} style={{ width: '100%', height: '100%' }} />
+               ) : (
+                 <Ionicons name="person" size={50} color={colors.primary} />
+               )}
             </View>
-          </View>
-          <Text style={[styles.profileName, { color: colors.text }]}>Emily Hawthorne</Text>
-          <View style={[styles.roleBadge, { backgroundColor: colors.accent }]}>
-            <Text style={[styles.roleText, { color: colors.primary }]}>Bride's family</Text>
-          </View>
-        </View>
-
-        <View style={styles.actionButtons}>
-          <TouchableOpacity style={[styles.primaryButton, { backgroundColor: colors.primary }]}>
-            <Ionicons name="add-circle-outline" size={20} color="#fff" />
-            <Text style={styles.primaryButtonText}>Add memories</Text>
+            <View style={[styles.avatarEditBadge, { backgroundColor: colors.primary }]}>
+               <Ionicons name="camera" size={12} color="#fff" />
+            </View>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.secondaryButton, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-            <Ionicons name="videocam-outline" size={20} color={colors.text} />
-            <Text style={[styles.secondaryButtonText, { color: colors.text }]}>Add greeting</Text>
-          </TouchableOpacity>
+          
+          <View style={styles.nameContainer}>
+            {isEditingName ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TextInput
+                  value={profileName}
+                  onChangeText={setProfileName}
+                  style={[styles.profileNameInput, { color: colors.text, borderBottomColor: colors.primary }]}
+                  autoFocus
+                  onBlur={handleNameSubmit}
+                  onSubmitEditing={handleNameSubmit}
+                />
+                <TouchableOpacity onPress={handleNameSubmit}>
+                  <Ionicons name="checkmark-circle" size={24} color={colors.primary} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                <Text style={[styles.profileName, { color: colors.text }]}>{profileName}</Text>
+                <TouchableOpacity onPress={editName} style={styles.editButton}>
+                   <Ionicons name="pencil" size={14} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
         </View>
 
         {/* AI Smart Albums Banner */}
@@ -87,13 +178,31 @@ export default function ProfileScreen({ navigation }) {
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.albumsScroll}>
             {albums.map((album) => (
-              <TouchableOpacity key={album.id} style={styles.albumCard} onPress={() => navigation.navigate('Albums')}>
+              <TouchableOpacity 
+                key={album.id} 
+                style={styles.albumCard} 
+                onPress={() => navigation.navigate(album.isAI ? 'SmartAlbums' : 'Albums')}
+              >
                 <View style={styles.albumGrid}>
-                  {[1,2,3,4].map(i => (
-                    <View key={i} style={[styles.albumImage, { backgroundColor: colors.border }]} />
-                  ))}
+                  {[0,1,2,3].map(i => {
+                    const id = album.ids?.[i];
+                    return (
+                      <View key={i} style={[styles.albumImage, { backgroundColor: album.isAI && aiResults ? colors.primary + '11' : colors.border }]}>
+                        {id && thumbnailMap[id] ? (
+                          <Image source={{ uri: thumbnailMap[id] }} style={styles.thumbImageFill} />
+                        ) : (
+                          album.isAI && i === 0 && (
+                            <Ionicons name="sparkles" size={14} color={colors.primary + '44'} style={{ alignSelf: 'center', marginTop: 15 }} />
+                          )
+                        )}
+                      </View>
+                    );
+                  })}
                 </View>
-                <Text style={[styles.albumTitle, { color: colors.text }]}>{album.title}</Text>
+                <View style={styles.albumInfo}>
+                  <Text style={[styles.albumTitle, { color: colors.text }]} numberOfLines={1}>{album.title}</Text>
+                  <Text style={[styles.albumCount, { color: colors.textSecondary }]}>{album.count} items</Text>
+                </View>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -105,33 +214,29 @@ export default function ProfileScreen({ navigation }) {
             <TouchableOpacity onPress={() => navigation.navigate('Folders')}><Ionicons name="chevron-forward" size={20} color={colors.primary} /></TouchableOpacity>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.albumsScroll}>
-            {folders.map((folder) => (
-              <TouchableOpacity key={folder.id} style={styles.folderCard} onPress={() => navigation.navigate('Folders')}>
-                <View style={[styles.folderIconPlaceholder, { backgroundColor: colors.border }]}>
-                  <Ionicons name="folder" size={40} color={colors.primary} />
+            {systemFolders.length > 0 ? (
+              systemFolders.map((folder) => (
+                <TouchableOpacity 
+                  key={folder.id} 
+                  style={styles.folderCard} 
+                  onPress={() => navigation.navigate('AlbumView', { album: folder })}
+                >
+                  <View style={[styles.folderIconPlaceholder, { backgroundColor: colors.border }]}>
+                    <Ionicons name="folder" size={40} color={colors.primary} />
+                  </View>
+                  <Text style={[styles.albumTitle, { color: colors.text }]} numberOfLines={1}>{folder.title}</Text>
+                  <Text style={[styles.folderCount, { color: colors.textSecondary }]}>{folder.assetCount} items</Text>
+                </TouchableOpacity>
+              ))
+            ) : (
+              [1,2,3].map(i => (
+                <View key={i} style={styles.folderCard}>
+                   <View style={[styles.folderIconPlaceholder, { backgroundColor: colors.border }]} />
+                   <View style={{ height: 10, width: 60, backgroundColor: colors.border, marginTop: 8 }} />
                 </View>
-                <Text style={[styles.albumTitle, { color: colors.text }]}>{folder.name}</Text>
-                <Text style={[styles.folderCount, { color: colors.textSecondary }]}>{folder.count} items</Text>
-              </TouchableOpacity>
-            ))}
+              ))
+            )}
           </ScrollView>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>My memories</Text>
-            <TouchableOpacity><Ionicons name="information-circle-outline" size={20} color={colors.textSecondary} /></TouchableOpacity>
-          </View>
-          <View style={styles.memoriesGrid}>
-            {memories.map((memory) => (
-              <View key={memory.id} style={[styles.memoryCard, { backgroundColor: colors.border }]}>
-                <View style={styles.memoryLikes}>
-                  <Ionicons name="heart" size={14} color="#fff" />
-                  <Text style={styles.likesText}>{memory.likes}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -160,39 +265,39 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 15,
+    position: 'relative',
   },
   avatar: { width: 90, height: 90, borderRadius: 45, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-  profileName: { fontSize: 24, fontWeight: '700', marginBottom: 5 },
-  roleBadge: { paddingHorizontal: 15, paddingVertical: 5, borderRadius: 20 },
-  roleText: { fontSize: 13, fontWeight: '600' },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-    marginTop: 25,
-    paddingHorizontal: 20,
-  },
-  primaryButton: {
-    flex: 1,
-    flexDirection: 'row',
-    height: 48,
-    borderRadius: 24,
+  avatarEditBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 3,
+    borderColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
+    zIndex: 10,
   },
-  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  secondaryButton: {
-    flex: 1,
+  nameContainer: {
     flexDirection: 'row',
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 1,
-    justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 5,
   },
-  secondaryButtonText: { fontSize: 15, fontWeight: '600' },
+  profileName: { fontSize: 24, fontWeight: '700' },
+  profileNameInput: {
+    fontSize: 24,
+    fontWeight: '700',
+    borderBottomWidth: 1,
+    paddingVertical: 4,
+    minWidth: 150,
+  },
+  editButton: {
+    padding: 4,
+  },
   aiBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -244,10 +349,9 @@ const styles = StyleSheet.create({
   },
   folderCount: { fontSize: 12, marginTop: 2 },
   albumImage: { width: '49%', height: '49%' },
-  albumTitle: { fontSize: 14, fontWeight: '600' },
-  memoriesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 15 },
-  memoryCard: { width: '47%', aspectRatio: 0.8, borderRadius: 20, overflow: 'hidden', justifyContent: 'flex-end', padding: 12 },
-  memoryLikes: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(0,0,0,0.3)', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
-  likesText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  albumTitle: { fontSize: 13, fontWeight: '700' },
+  albumInfo: { marginTop: 2 },
+  albumCount: { fontSize: 11, fontWeight: '600' },
+  thumbImageFill: { width: '100%', height: '100%', borderRadius: 4 },
 });
 

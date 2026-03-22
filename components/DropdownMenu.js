@@ -6,6 +6,7 @@ import { useTheme } from '../contexts/ThemeContext';
 export default function DropdownMenu({ visible, onClose, onSelect, anchorPosition }) {
   const { colors } = useTheme();
   const menuOptions = [
+    { id: 'calendar', label: 'Calendar', icon: 'calendar-outline' },
     { id: 'settings', label: 'Settings', icon: 'settings-outline' },
     { id: 'trash', label: 'Trash', icon: 'trash-outline' },
   ];

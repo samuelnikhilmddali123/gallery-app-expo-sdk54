@@ -706,6 +706,7 @@ export default function HomeScreen({ navigation, route }) {
     return `${item?.id?.toString() || `media-${index}`}_${item?.uri || ''}`;
   }, []);
 
+
   const loadGallery = async (showLoader = true, reset = false) => {
     try {
       if (showLoader) setLoading(true);
@@ -962,6 +963,9 @@ export default function HomeScreen({ navigation, route }) {
     setMenuVisible(false);
 
     switch (optionId) {
+      case 'calendar':
+        navigation.navigate('Calendar');
+        break;
       case 'settings':
         setTimeout(() => {
           setSettingsPanelVisible(true);

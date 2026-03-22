@@ -8,10 +8,65 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useTheme } from '../contexts/ThemeContext';
-import { scanGalleryWithAI, loadCachedAIResults, clearAICache, CATEGORY_RULES } from '../services/aiService';
+import { scanGalleryWithAI, loadCachedAIResults, clearAICache, CATEGORY_RULES, isAIAvailable } from '../services/aiService';
+import Animated, { 
+  useSharedValue, 
+  useAnimatedStyle, 
+  withTiming, 
+  withSequence,
+  withDelay,
+  Easing,
+  runOnJS
+} from 'react-native-reanimated';
 
-const { width } = Dimensions.get('window');
+const { width, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const THUMB = (width - 48) / 3;
+
+// --- Floating Smoke Media Component ---
+const FloatingPhoto = ({ uri, onComplete }) => {
+  const translateY = useSharedValue(0);
+  const translateX = useSharedValue((Math.random() - 0.5) * 100);
+  const opacity = useSharedValue(1);
+  const scale = useSharedValue(0.5);
+
+  useEffect(() => {
+    translateY.value = withTiming(-SCREEN_HEIGHT * 0.7, {
+      duration: 3000,
+      easing: Easing.out(Easing.quad),
+    }, () => runOnJS(onComplete)());
+    
+    translateX.value = withTiming(translateX.value + (Math.random() - 0.5) * 150, {
+      duration: 3000,
+    });
+
+    opacity.value = withSequence(
+      withTiming(1, { duration: 500 }),
+      withDelay(1500, withTiming(0, { duration: 1000 }))
+    );
+
+    scale.value = withTiming(1.2, { duration: 3000 });
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: translateY.value },
+      { translateX: translateX.value },
+      { scale: scale.value }
+    ],
+    opacity: opacity.value,
+  }));
+
+  return (
+    <Animated.View style={[styles.floatingPhoto, animatedStyle]}>
+      <Image 
+        source={{ uri }} 
+        style={styles.smokeImage} 
+        contentFit="cover"
+        transition={200}
+      />
+    </Animated.View>
+  );
+};
 
 export default function SmartAlbumsScreen({ navigation }) {
   const { colors } = useTheme();
@@ -21,10 +76,19 @@ export default function SmartAlbumsScreen({ navigation }) {
   const [mediaMap, setMediaMap] = useState({});
   const [activeTab, setActiveTab] = useState('goodPics');
   const [cachedAt, setCachedAt] = useState(null);
+  const [isSupported, setIsSupported] = useState(true);
+  const [scanStream, setScanStream] = useState([]); // For smoke animation
+  const maxSmokeItems = 12; // Performance limit
 
   useEffect(() => {
+    checkSupport();
     loadCache();
   }, []);
+
+  const checkSupport = async () => {
+    const available = await isAIAvailable();
+    setIsSupported(available);
+  };
 
   const loadCache = async () => {
     const cached = await loadCachedAIResults();
@@ -51,6 +115,18 @@ export default function SmartAlbumsScreen({ navigation }) {
     setIsScanning(true);
     setProgress({ current: 0, total: 0 });
 
+    const available = await isAIAvailable();
+    if (!available) {
+      Alert.alert(
+        '🚀 Rebuild Required',
+        'Your AI Smart Albums feature needs to be linked to your app. Please run:\n\nnpx expo run:android\n\n(or recreate your development build) to enable on-device AI.',
+        [{ text: 'OK' }]
+      );
+      setIsScanning(false);
+      setIsSupported(false);
+      return;
+    }
+
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
@@ -59,15 +135,40 @@ export default function SmartAlbumsScreen({ navigation }) {
         return;
       }
 
-      const { assets } = await MediaLibrary.getAssetsAsync({
-        mediaType: 'photo',
-        first: 50,
-        sortBy: MediaLibrary.SortBy.modificationTime,
-      });
+      // Fetch ALL photos from the library
+      let allAssets = [];
+      let hasNextPage = true;
+      let after = null;
+
+      while (hasNextPage) {
+        const result = await MediaLibrary.getAssetsAsync({
+          mediaType: 'photo',
+          first: 1000, // Batch size
+          after: after,
+          sortBy: MediaLibrary.SortBy.modificationTime,
+        });
+        allAssets = [...allAssets, ...result.assets];
+        hasNextPage = result.hasNextPage;
+        after = result.endCursor;
+        
+        // Safety break if gallery is unusually huge, but let's allow up to 10k for now
+        if (allAssets.length >= 10000) break;
+      }
+
+      const uriLookup = {};
+      allAssets.forEach(a => uriLookup[a.id] = a.uri);
 
       const results = await scanGalleryWithAI(
-        assets.map(a => ({ id: a.id, uri: a.uri })),
-        (current, total) => setProgress({ current, total })
+        allAssets.map(a => ({ id: a.id, uri: a.uri })),
+        (current, total, category, id) => {
+          setProgress({ current, total });
+          if (uriLookup[id]) {
+            setScanStream(prev => {
+              const newItem = { id: `${id}_${Date.now()}`, uri: uriLookup[id] };
+              return [...prev.slice(-maxSmokeItems), newItem];
+            });
+          }
+        }
       );
 
       setSmartAlbums(results);
@@ -75,15 +176,7 @@ export default function SmartAlbumsScreen({ navigation }) {
       await fetchMediaForIds(Object.values(results).flat());
 
     } catch (e) {
-      if (e.message === 'NO_API_KEY') {
-        Alert.alert(
-          '🔑 API Key Required',
-          'To use AI Smart Albums, please add your Google Cloud Vision API key in:\n\nservices/aiService.js\n\nGet a free key at:\nconsole.cloud.google.com',
-          [{ text: 'OK' }]
-        );
-      } else {
-        Alert.alert('Scan failed', e.message);
-      }
+      Alert.alert('Scan failed', e.message);
     }
 
     setIsScanning(false);
@@ -158,7 +251,7 @@ export default function SmartAlbumsScreen({ navigation }) {
           </View>
           <Text style={[styles.scanTitle, { color: colors.text }]}>Discover Your Best Moments</Text>
           <Text style={[styles.scanDesc, { color: colors.textSecondary }]}>
-            Our AI will scan your gallery and automatically sort photos into{' '}
+            Our on-device AI will scan your gallery locally and automatically sort photos into{' '}
             <Text style={{ color: colors.primary, fontWeight: '700' }}>Good Pics</Text>,{' '}
             <Text style={{ color: colors.primary, fontWeight: '700' }}>Family Pics</Text>, and more.
           </Text>
@@ -172,9 +265,9 @@ export default function SmartAlbumsScreen({ navigation }) {
           </TouchableOpacity>
 
           <View style={[styles.infoBox, { backgroundColor: colors.accent, borderColor: colors.primary + '33' }]}>
-            <Ionicons name="information-circle-outline" size={16} color={colors.primary} />
+            <Ionicons name="shield-checkmark-outline" size={16} color={colors.primary} />
             <Text style={[styles.infoText, { color: colors.primary }]}>
-              Requires Google Cloud Vision API key. Up to 50 photos are analyzed per scan.
+              Private & Secure. All processing happens locally on your device. No data ever leaves your phone.
             </Text>
           </View>
         </View>
@@ -182,19 +275,31 @@ export default function SmartAlbumsScreen({ navigation }) {
 
       {/* Scanning Progress */}
       {isScanning && (
-        <View style={styles.scanPrompt}>
-          <View style={[styles.aiIconCircle, { backgroundColor: colors.accent }]}>
-            <ActivityIndicator size="large" color={colors.primary} />
+        <View style={styles.scanningOverlay}>
+          {/* Floating Smoke Items */}
+          <View style={styles.smokeContainer} pointerEvents="none">
+            {scanStream.map((item) => (
+              <FloatingPhoto 
+                key={item.id} 
+                uri={item.uri} 
+                onComplete={() => setScanStream(prev => prev.filter(i => i.id !== item.id))}
+              />
+            ))}
           </View>
-          <Text style={[styles.scanTitle, { color: colors.text }]}>Analyzing your photos…</Text>
-          <Text style={[styles.scanDesc, { color: colors.textSecondary }]}>
-            {progress.current} of {progress.total} photos scanned
-          </Text>
-          <View style={[styles.progressBar, { backgroundColor: colors.border }]}>
-            <View style={[styles.progressFill, {
-              backgroundColor: colors.primary,
-              width: progress.total > 0 ? `${(progress.current / progress.total) * 100}%` : '5%'
-            }]} />
+
+          <View style={styles.scanPrompt}>
+            <Text style={[styles.scanTitle, { color: colors.text, marginTop: 100 }]}>AI Analysis in Progress…</Text>
+            <Text style={[styles.scanDesc, { color: colors.textSecondary }]}>
+              Finding your best moments • {progress.current}/{progress.total}
+            </Text>
+            <Text style={[styles.smokeHint, { color: colors.primary }]}>Your photos are floating up like magic ✨</Text>
+            
+            <View style={[styles.progressBarFull, { backgroundColor: colors.border }]}>
+              <View style={[styles.progressFill, {
+                backgroundColor: colors.primary,
+                width: progress.total > 0 ? `${(progress.current / progress.total) * 100}%` : '5%'
+              }]} />
+            </View>
           </View>
         </View>
       )}
@@ -383,4 +488,49 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   rescanText: { fontSize: 15, fontWeight: '600' },
+  // --- Smoke Animation Styles ---
+  scanningOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    zIndex: 100,
+  },
+  smokeContainer: {
+    position: 'absolute',
+    bottom: 50,
+    left: 0,
+    right: 0,
+    height: SCREEN_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  floatingPhoto: {
+    position: 'absolute',
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fff',
+    backgroundColor: '#eee',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    overflow: 'hidden',
+  },
+  smokeImage: { width: '100%', height: '100%' },
+  smokeHint: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    marginTop: 10,
+    fontStyle: 'italic',
+    opacity: 0.8
+  },
+  progressBarFull: {
+    width: '100%',
+    height: 10,
+    borderRadius: 5,
+    overflow: 'hidden',
+    marginTop: 20,
+  },
 });

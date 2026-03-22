@@ -1,102 +1,230 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, ActivityIndicator, FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as MediaLibrary from 'expo-media-library';
+import { Image } from 'expo-image';
 import { useTheme } from '../contexts/ThemeContext';
 
-const DAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-const DATES = [
-  29, 30, 31, 1, 2, 3, 4,
-  5, 6, 7, 8, 9, 10, 11,
-  12, 13, 14, 15, 16, 17, 18,
-  19, 20, 21, 22, 23, 24, 25,
-  26, 27, 28, 29, 30, 31, 1
-];
+const { width } = Dimensions.get('window');
+const COLUMN_COUNT = 3;
+const ITEM_SIZE = (width - 40) / COLUMN_COUNT;
 
 export default function CalendarScreen({ navigation }) {
   const { colors } = useTheme();
-  const [selectedDate, setSelectedDate] = useState(17);
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [dayPhotos, setDayPhotos] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [isPickerVisible, setIsPickerVisible] = useState(false);
+  const yearScrollRef = React.useRef(null);
+
+  useEffect(() => {
+    loadPhotosForDate(selectedDate);
+  }, [selectedDate]);
+
+  useEffect(() => {
+    if (isPickerVisible && yearScrollRef.current) {
+      // Scroll to current year (approx calc: index * itemWidth)
+      const currentYear = currentDate.getFullYear();
+      const idx = years.indexOf(currentYear);
+      if (idx !== -1) {
+          setTimeout(() => {
+            yearScrollRef.current?.scrollTo({ x: idx * 75, animated: true });
+          }, 100);
+      }
+    }
+  }, [isPickerVisible]);
+
+  const loadPhotosForDate = async (date) => {
+    try {
+      setLoading(true);
+      const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+      const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
+
+      const { assets } = await MediaLibrary.getAssetsAsync({
+        createdAfter: startOfDay,
+        createdBefore: endOfDay,
+        mediaType: ['photo', 'video'],
+        sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+      });
+      setDayPhotos(assets);
+    } catch (e) {
+      console.warn('Calendar: Failed to load photos', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generateCalendar = () => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    // Adjust firstDay (0 is Sunday, let's make it Monday-offset)
+    const offset = firstDay === 0 ? 6 : firstDay - 1;
+    
+    const dates = [];
+    // Previous month padding
+    const prevMonthDays = new Date(year, month, 0).getDate();
+    for (let i = offset - 1; i >= 0; i--) {
+      dates.push({ day: prevMonthDays - i, month: month - 1, current: false });
+    }
+    // Current month
+    for (let i = 1; i <= daysInMonth; i++) {
+        dates.push({ day: i, month: month, current: true });
+    }
+    // Next month padding
+    const remaining = 42 - dates.length;
+    for (let i = 1; i <= remaining; i++) {
+        dates.push({ day: i, month: month + 1, current: false });
+    }
+    return dates;
+  };
+
+  const changeMonth = (val) => {
+    const next = new Date(currentDate.getFullYear(), currentDate.getMonth() + val, 1);
+    setCurrentDate(next);
+  };
+
+  const setYear = (year) => {
+    setCurrentDate(new Date(year, currentDate.getMonth(), 1));
+    setIsPickerVisible(false);
+  };
+
+  const setMonth = (mIdx) => {
+    setCurrentDate(new Date(currentDate.getFullYear(), mIdx, 1));
+    setIsPickerVisible(false);
+  };
+
+  const isSelected = (dateObj) => {
+      const d = new Date(currentDate.getFullYear(), dateObj.month, dateObj.day);
+      return d.toDateString() === selectedDate.toDateString();
+  };
+
+  const years = Array.from({ length: 31 }, (_, i) => 2000 + i);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>Event calendar</Text>
-        <TouchableOpacity style={styles.headerIcon}>
-          <Ionicons name="calendar-outline" size={24} color={colors.text} />
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
+        <Text style={[styles.title, { color: colors.text }]}>Photo Calendar</Text>
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={[styles.calendarCard, { backgroundColor: colors.surface, shadowColor: colors.cardShadow }]}>
           <View style={styles.calendarHeader}>
-            <TouchableOpacity><Ionicons name="chevron-back" size={20} color={colors.textSecondary} /></TouchableOpacity>
-            <Text style={[styles.monthText, { color: colors.text }]}>May 2024</Text>
-            <TouchableOpacity><Ionicons name="chevron-forward" size={20} color={colors.textSecondary} /></TouchableOpacity>
+            <TouchableOpacity onPress={() => changeMonth(-1)}><Ionicons name="chevron-back" size={22} color={colors.textSecondary} /></TouchableOpacity>
+            
+            <TouchableOpacity onPress={() => setIsPickerVisible(!isPickerVisible)} style={styles.headerInfoCenter}>
+              <Text style={[styles.monthText, { color: colors.text }]}>
+                  {currentDate.toLocaleString('default', { month: 'long', year: 'numeric' })}
+              </Text>
+              <Ionicons name={isPickerVisible ? "chevron-up" : "chevron-down"} size={16} color={colors.primary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => changeMonth(1)}><Ionicons name="chevron-forward" size={22} color={colors.textSecondary} /></TouchableOpacity>
           </View>
 
-          <View style={styles.daysRow}>
-            {DAYS.map((day, i) => (
-              <Text key={i} style={[styles.dayLabel, { color: colors.textSecondary }]}>{day}</Text>
-            ))}
-          </View>
+          {isPickerVisible ? (
+            <View style={styles.pickerContainer}>
+              <Text style={[styles.pickerLabel, { color: colors.textSecondary }]}>Select Year</Text>
+              <ScrollView 
+                ref={yearScrollRef}
+                horizontal 
+                showsHorizontalScrollIndicator={false} 
+                style={styles.yearScroll}
+              >
+                {years.map(y => (
+                  <TouchableOpacity 
+                    key={y} 
+                    onPress={() => setYear(y)}
+                    style={[styles.yearChip, currentDate.getFullYear() === y && { backgroundColor: colors.primary }]}
+                  >
+                    <Text style={[styles.yearText, currentDate.getFullYear() === y && { color: '#fff' }]}>{y}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              
+              <Text style={[styles.pickerLabel, { color: colors.textSecondary, marginTop: 15 }]}>Select Month</Text>
+              <View style={styles.monthGrid}>
+                {months.map((m, idx) => (
+                  <TouchableOpacity 
+                    key={m} 
+                    onPress={() => setMonth(idx)}
+                    style={[styles.monthCard, currentDate.getMonth() === idx && { backgroundColor: colors.primary }]}
+                  >
+                    <Text style={[styles.monthCardText, currentDate.getMonth() === idx && { color: '#fff' }]}>{m}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.daysRow}>
+                {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, i) => (
+                  <Text key={i} style={[styles.dayLabel, { color: colors.textSecondary }]}>{day}</Text>
+                ))}
+              </View>
 
-          <View style={styles.datesGrid}>
-            {DATES.map((date, i) => {
-              const isToday = date === 17;
-              const isOtherMonth = i < 3 || i > 33;
-              const isSelected = date === selectedDate;
-
-              return (
-                <TouchableOpacity
-                  key={i}
-                  onPress={() => setSelectedDate(date)}
-                  style={[
-                    styles.dateCell,
-                    isSelected && { backgroundColor: colors.primary }
-                  ]}
-                >
-                  <Text style={[
-                    styles.dateText,
-                    { color: isOtherMonth ? colors.searchPlaceholder : colors.text },
-                    isSelected && { color: '#fff' }
-                  ]}>
-                    {date}
-                  </Text>
-                  {isToday && !isSelected && <View style={[styles.todayDot, { backgroundColor: colors.primary }]} />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+              <View style={styles.datesGrid}>
+                {generateCalendar().map((item, i) => {
+                  const active = isSelected(item);
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      onPress={() => setSelectedDate(new Date(currentDate.getFullYear(), item.month, item.day))}
+                      style={[styles.dateCell, active && { backgroundColor: colors.primary }]}
+                    >
+                      <Text style={[
+                          styles.dateText, 
+                          { color: item.current ? colors.text : colors.searchPlaceholder },
+                          active && { color: '#fff' }
+                      ]}>
+                        {item.day}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
         </View>
 
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Events this day</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>
+            Photos on {selectedDate.toLocaleDateString('default', { day: 'numeric', month: 'short' })}
+          </Text>
+          <Text style={[styles.countText, { color: colors.textSecondary }]}>{dayPhotos.length} items</Text>
         </View>
 
-        <TouchableOpacity style={[styles.eventCard, { backgroundColor: colors.surface, shadowColor: colors.cardShadow }]}>
-          <View style={styles.eventImagePlaceholder}>
-            <Ionicons name="people" size={40} color={colors.primary} />
+        {loading ? (
+          <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 20 }} />
+        ) : (
+          <View style={styles.photoGrid}>
+            {dayPhotos.map((item) => (
+              <TouchableOpacity 
+                key={item.id} 
+                style={styles.photoItem}
+                onPress={() => navigation.navigate('Viewer', { item, allItems: dayPhotos })}
+              >
+                <Image source={{ uri: item.uri }} style={styles.gridImage} contentFit="cover" />
+              </TouchableOpacity>
+            ))}
+            {dayPhotos.length === 0 && (
+              <View style={styles.empty}>
+                <Ionicons name="images-outline" size={40} color={colors.border} />
+                <Text style={{ color: colors.textSecondary, marginTop: 10 }}>No photos on this day</Text>
+              </View>
+            )}
           </View>
-          <View style={styles.eventInfo}>
-            <Text style={[styles.eventTitle, { color: colors.text }]}>TeamLab's Team Building</Text>
-            <View style={styles.eventDetailRow}>
-              <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
-              <Text style={[styles.eventDetail, { color: colors.textSecondary }]}>3:00 PM | 05.17.2024</Text>
-            </View>
-            <View style={styles.eventDetailRow}>
-              <Ionicons name="location-outline" size={14} color={colors.textSecondary} />
-              <Text style={[styles.eventDetail, { color: colors.textSecondary }]}>Celebration Haven</Text>
-            </View>
-            <View style={styles.avatarsRow}>
-               {[1,2,3,4,5].map(i => (
-                 <View key={i} style={[styles.avatarMini, { backgroundColor: colors.border, marginLeft: i === 1 ? 0 : -10 }]} />
-               ))}
-               <View style={[styles.avatarCount, { backgroundColor: colors.accent, marginLeft: -10 }]}>
-                 <Text style={[styles.avatarCountText, { color: colors.primary }]}>+10</Text>
-               </View>
-            </View>
-          </View>
-        </TouchableOpacity>
+        )}
+        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -108,33 +236,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  title: { fontSize: 24, fontWeight: '700' },
-  headerIcon: { padding: 5 },
+  backBtn: { padding: 4 },
+  title: { fontSize: 20, fontWeight: '700' },
   calendarCard: {
-    margin: 20,
+    margin: 16,
     borderRadius: 24,
-    padding: 20,
-    shadowOffset: { width: 0, height: 10 },
+    padding: 16,
+    shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 1,
-    shadowRadius: 20,
-    elevation: 5,
+    shadowRadius: 16,
+    elevation: 4,
   },
   calendarHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  monthText: { fontSize: 16, fontWeight: '600' },
+  monthText: { fontSize: 18, fontWeight: '700' },
   daysRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginBottom: 10,
+    marginBottom: 8,
   },
-  dayLabel: { fontSize: 12, fontWeight: '500', width: 40, textAlign: 'center' },
+  dayLabel: { fontSize: 13, fontWeight: '600', width: 40, textAlign: 'center' },
   datesGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -148,34 +276,81 @@ const styles = StyleSheet.create({
     marginVertical: 4,
     borderRadius: 20,
   },
-  dateText: { fontSize: 14, fontWeight: '500' },
-  todayDot: { width: 4, height: 4, borderRadius: 2, position: 'absolute', bottom: 5 },
-  sectionHeader: { paddingHorizontal: 20, marginTop: 10, marginBottom: 15 },
-  sectionTitle: { fontSize: 18, fontWeight: '700' },
-  eventCard: {
-    marginHorizontal: 20,
-    padding: 15,
-    borderRadius: 20,
-    flexDirection: 'row',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 1,
-    shadowRadius: 15,
-    elevation: 4,
-  },
-  eventImagePlaceholder: {
-    width: 80,
-    height: 80,
-    borderRadius: 15,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center',
+  dateText: { fontSize: 15, fontWeight: '600' },
+  sectionHeader: { 
+    paddingHorizontal: 20, 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
     alignItems: 'center',
+    marginBottom: 12
   },
-  eventInfo: { flex: 1, marginLeft: 15 },
-  eventTitle: { fontSize: 16, fontWeight: '700', marginBottom: 5 },
-  eventDetailRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3 },
-  eventDetail: { fontSize: 12, marginLeft: 5 },
-  avatarsRow: { flexDirection: 'row', marginTop: 8, alignItems: 'center' },
-  avatarMini: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#fff' },
-  avatarCount: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#fff', justifyContent: 'center', alignItems: 'center' },
-  avatarCountText: { fontSize: 10, fontWeight: '700' },
+  sectionTitle: { fontSize: 18, fontWeight: '700' },
+  countText: { fontSize: 14, fontWeight: '500' },
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+  },
+  photoItem: {
+    width: ITEM_SIZE,
+    height: ITEM_SIZE,
+    padding: 2,
+  },
+  gridImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+  },
+  empty: {
+    width: '100%',
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  headerInfoCenter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  pickerContainer: {
+    marginTop: 10,
+    paddingBottom: 10,
+  },
+  pickerLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  yearScroll: {
+    flexDirection: 'row',
+    marginBottom: 5,
+  },
+  yearChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 8,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  yearText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  monthGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  monthCard: {
+    width: (width - 120) / 4,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  monthCardText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });

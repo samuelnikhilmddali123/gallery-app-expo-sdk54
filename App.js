@@ -30,6 +30,8 @@ import ForgotVaultPasswordScreen from './screens/ForgotVaultPasswordScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import CalendarScreen from './screens/CalendarScreen';
 import SmartAlbumsScreen from './screens/SmartAlbumsScreen';
+import ChatListScreen from './screens/ChatListScreen';
+import ChatScreen from './screens/ChatScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -47,23 +49,17 @@ function MainTabs() {
 
           if (focused) {
             if (route.name === 'Home') iconName = 'home';
-            else if (route.name === 'Calendar') iconName = 'calendar';
+            else if (route.name === 'ChatTab') iconName = 'chatbubble';
             else if (route.name === 'Profile') iconName = 'person';
           } else {
             if (route.name === 'Home') iconName = 'home-outline';
-            else if (route.name === 'Calendar') iconName = 'calendar-outline';
+            else if (route.name === 'ChatTab') iconName = 'chatbubble-outline';
             else if (route.name === 'Profile') iconName = 'person-outline';
           }
 
-          if (focused && route.name === 'Calendar') {
-             return (
-               <View style={{ backgroundColor: colors.primary, borderRadius: 12, padding: 8, marginTop: -10 }}>
-                 <Ionicons name="calendar-outline" size={24} color="#fff" />
-               </View>
-             );
-          }
-
-          return <Ionicons name={iconName} size={24} color={color} />;
+          return (
+            <Ionicons name={iconName} size={size} color={color} />
+          );
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textSecondary,
@@ -80,8 +76,8 @@ function MainTabs() {
       })}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Calendar" component={CalendarScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
+      <Tab.Screen name="ChatTab" component={ChatListScreen} />
     </Tab.Navigator>
   );
 }
@@ -108,6 +104,22 @@ function AppNavigator() {
         initialRouteName="MainTabs"
       >
         <Stack.Screen name="MainTabs" component={MainTabs} />
+        <Stack.Screen
+          name="Calendar"
+          component={CalendarScreen}
+          options={{
+            animation: 'slide_from_right',
+            gestureEnabled: true,
+          }}
+        />
+        <Stack.Screen
+          name="Chat"
+          component={ChatScreen}
+          options={{
+            animation: 'slide_from_right',
+            gestureEnabled: true,
+          }}
+        />
         <Stack.Screen
           name="Albums"
           component={AlbumsScreen}
