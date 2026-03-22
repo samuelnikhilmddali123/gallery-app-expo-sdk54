@@ -57,19 +57,27 @@ const getLanguageName = (code) => {
 const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWidth, colors }) => {
   const [previewTime, setPreviewTime] = useState(0);
   const previewVideoRef = useRef(null);
+  const lastPreviewUpdateRef = useRef(0);
+  const previewThrottleMs = 100; // Update preview every 100ms
 
   useAnimatedReaction(
     () => ({ x: scrubX.value, active: isScrubbing.value }),
     (data) => {
       if (data.active && containerWidth > 0) {
         const time = (data.x / containerWidth) * duration;
-        runOnJS(setPreviewTime)(time);
+
+        // PERFORMANCE: Throttle preview time updates
+        const now = Date.now();
+        if (now - lastPreviewUpdateRef.current >= previewThrottleMs) {
+          lastPreviewUpdateRef.current = now;
+          runOnJS(setPreviewTime)(time);
+        }
       }
     }
   );
 
   useEffect(() => {
-    if (previewVideoRef.current && isScrubbing.value) {
+    if (previewVideoRef.current && isScrubbing.value && previewTime >= 0) {
       previewVideoRef.current.setPositionAsync(previewTime * 1000, {
         toleranceBeforeMillis: 0,
         toleranceAfterMillis: 0
@@ -118,13 +126,21 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
 const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggle, scrubX, isScrubbing }) => {
   const [layout, setLayout] = useState({ width: 0, x: 0 });
   const containerRef = useRef(null);
+  const lastSeekCallRef = useRef(0);
+  const throttleMs = 100; // Throttle onSeek calls to 100ms (10 times/sec)
 
-  const handleTouch = (absoluteX) => {
+  const handleTouch = (absoluteX, isThrottled = true) => {
     if (layout.width > 0 && duration > 0) {
       const relativeX = absoluteX - layout.x;
       const percent = Math.max(0, Math.min(1, relativeX / layout.width));
-      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
-      onSeek(percent * duration, true); // true indicates active scrubbing
+      const timeInSeconds = percent * duration;
+
+      // PERFORMANCE: Throttle onSeek calls during scrubbing
+      const now = Date.now();
+      if (!isThrottled || now - lastSeekCallRef.current >= throttleMs) {
+        lastSeekCallRef.current = now;
+        onSeek(timeInSeconds, true); // true indicates active scrubbing
+      }
     }
   };
 
@@ -134,14 +150,32 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
       isScrubbing.value = true;
       runOnJS(onIsInteracting)?.(true);
       runOnJS(onScrubToggle)?.(true);
-      runOnJS(handleTouch)(e.absoluteX);
+
+      // Update scrubX on native thread (smooth animation)
+      const relativeX = e.absoluteX - layout.x;
+      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
+
+      // Call handleTouch without throttle on start for instant feedback
+      runOnJS(handleTouch)(e.absoluteX, false);
     })
     .onUpdate((e) => {
-      runOnJS(handleTouch)(e.absoluteX);
+      // PERFORMANCE: Update scrubX directly on native thread (no runOnJS)
+      // This keeps the thumb animation smooth at 60 FPS
+      const relativeX = e.absoluteX - layout.x;
+      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
+
+      // Throttled seek call to JS thread
+      runOnJS(handleTouch)(e.absoluteX, true);
     })
-    .onEnd(() => {
+    .onEnd((e) => {
       isScrubbing.value = false;
       runOnJS(onIsInteracting)?.(false);
+
+      // Final position update (no throttle for accuracy)
+      const relativeX = e.absoluteX - layout.x;
+      const percent = Math.max(0, Math.min(1, relativeX / layout.width));
+      runOnJS(onSeek)(percent * duration, false); // false = not scrubbing, execute immediately
+
       runOnJS(onScrubToggle)?.(false);
     })
     .onFinalize(() => {
@@ -152,7 +186,12 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
 
   const tapGesture = Gesture.Tap()
     .onStart((e) => {
-      runOnJS(handleTouch)(e.absoluteX);
+      // Update scrubX immediately for visual feedback
+      const relativeX = e.absoluteX - layout.x;
+      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
+
+      // Tap is instant, no throttle
+      runOnJS(handleTouch)(e.absoluteX, false);
     });
 
   const composed = Gesture.Simultaneous(gesture, tapGesture);
@@ -476,6 +515,11 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const wasPlayingBeforeScrubRef = useRef(false);
   const isScrubbingRef = useRef(false);
 
+  // Performance optimization: Throttle video seeking during scrubbing
+  const lastSeekTimeRef = useRef(0);
+  const pendingSeekRef = useRef(null);
+  const seekThrottleMs = 100; // Seek video every 100ms during scrubbing (10 times/sec)
+
   // Apply player settings in a stable effect
   useEffect(() => {
     const setupAudio = async () => {
@@ -763,20 +807,34 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   };
 
   const handleSeek = async (timeInSeconds, isScrubbing = false) => {
-    if (videoRef.current) {
-      try {
-        // Continuous seek during scrubbing uses zero tolerances for precise frame updates
-        if (isScrubbing) {
+    if (!videoRef.current) return;
+
+    try {
+      const now = Date.now();
+
+      if (isScrubbing) {
+        // PERFORMANCE: Throttle seeks during active scrubbing
+        // Only seek if enough time has passed since last seek
+        if (now - lastSeekTimeRef.current >= seekThrottleMs) {
+          lastSeekTimeRef.current = now;
+          pendingSeekRef.current = null;
+
+          // Use zero tolerances for precise frame updates during scrubbing
           await videoRef.current.setPositionAsync(timeInSeconds * 1000, {
             toleranceBeforeMillis: 0,
             toleranceAfterMillis: 0
           });
         } else {
-          await videoRef.current.setPositionAsync(timeInSeconds * 1000);
+          // Store the pending seek position to execute later
+          pendingSeekRef.current = timeInSeconds;
         }
-      } catch (e) {
-        console.warn('ViewerScreen: Seek failed', e);
+      } else {
+        // NOT scrubbing: Execute immediately (tap or drag end)
+        lastSeekTimeRef.current = now;
+        await videoRef.current.setPositionAsync(timeInSeconds * 1000);
       }
+    } catch (e) {
+      console.warn('ViewerScreen: Seek failed', e);
     }
   };
 
@@ -792,6 +850,12 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           await videoRef.current.pauseAsync();
         }
       } else {
+        // PERFORMANCE: Execute any pending seek when scrubbing ends
+        if (pendingSeekRef.current !== null) {
+          await videoRef.current.setPositionAsync(pendingSeekRef.current * 1000);
+          pendingSeekRef.current = null;
+        }
+
         // Resume if it was playing before scrubbing started
         if (wasPlayingBeforeScrubRef.current) {
           await videoRef.current.playAsync();

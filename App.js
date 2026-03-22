@@ -17,8 +17,8 @@ import { Ionicons } from '@expo/vector-icons';
 import HomeScreen from './screens/HomeScreen';
 import AlbumsScreen from './screens/AlbumsScreen';
 import AlbumViewScreen from './screens/AlbumViewScreen';
-import FoldersScreen from './screens/FoldersScreen'; // NEW
-import FolderDetailScreen from './screens/FolderDetailScreen'; // NEW
+import FoldersScreen from './screens/FoldersScreen';
+import FolderDetailScreen from './screens/FolderDetailScreen';
 import VaultPasswordScreen from './screens/VaultPasswordScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import ViewerScreen from './screens/ViewerScreen';
@@ -27,6 +27,8 @@ import TrashScreen from './screens/TrashScreen';
 import VaultScreen from './screens/VaultScreen';
 import VaultSetupScreen from './screens/VaultSetupScreen';
 import ForgotVaultPasswordScreen from './screens/ForgotVaultPasswordScreen';
+import ProfileScreen from './screens/ProfileScreen';
+import CalendarScreen from './screens/CalendarScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -42,54 +44,43 @@ function MainTabs() {
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
 
-          if (route.name === 'Photos') {
-            iconName = focused ? 'images' : 'images-outline';
-          } else if (route.name === 'Albums') {
-            iconName = focused ? 'albums' : 'albums-outline';
-          } else if (route.name === 'Folders') {
-            iconName = focused ? 'folder' : 'folder-outline';
+          if (focused) {
+            if (route.name === 'Home') iconName = 'home';
+            else if (route.name === 'Calendar') iconName = 'calendar';
+            else if (route.name === 'Profile') iconName = 'person';
+          } else {
+            if (route.name === 'Home') iconName = 'home-outline';
+            else if (route.name === 'Calendar') iconName = 'calendar-outline';
+            else if (route.name === 'Profile') iconName = 'person-outline';
           }
 
-          return <Ionicons name={iconName} size={size} color={color} />;
+          if (focused && route.name === 'Calendar') {
+             return (
+               <View style={{ backgroundColor: colors.primary, borderRadius: 12, padding: 8, marginTop: -10 }}>
+                 <Ionicons name="calendar-outline" size={24} color="#fff" />
+               </View>
+             );
+          }
+
+          return <Ionicons name={iconName} size={24} color={color} />;
         },
-        tabBarActiveTintColor: colors.icon,
-        tabBarInactiveTintColor: colors.searchPlaceholder,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textSecondary,
+        tabBarShowLabel: false,
         tabBarStyle: {
           backgroundColor: colors.tabBarBackground,
-          borderTopColor: colors.searchBar,
-          borderTopWidth: 1,
-          height: 60 + insets.bottom,
-          paddingBottom: Math.max(insets.bottom, 8),
-          paddingTop: 8,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '500',
-          marginBottom: 4,
+          borderTopWidth: 0,
+          height: 75 + insets.bottom,
+          paddingBottom: insets.bottom + 15,
+          paddingTop: 10,
+          elevation: 0,
+          shadowOpacity: 0,
         },
       })}
     >
-      <Tab.Screen
-        name="Photos"
-        component={HomeScreen}
-        options={{
-          tabBarLabel: 'Photos',
-        }}
-      />
-      <Tab.Screen
-        name="Albums"
-        component={AlbumsScreen}
-        options={{
-          tabBarLabel: 'Albums',
-        }}
-      />
-      <Tab.Screen
-        name="Folders"
-        component={FoldersScreen}
-        options={{
-          tabBarLabel: 'Folders',
-        }}
-      />
+      <Tab.Screen name="Home" component={HomeScreen} />
+      <Tab.Screen name="Calendar" component={CalendarScreen} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }
@@ -116,6 +107,22 @@ function AppNavigator() {
         initialRouteName="MainTabs"
       >
         <Stack.Screen name="MainTabs" component={MainTabs} />
+        <Stack.Screen
+          name="Albums"
+          component={AlbumsScreen}
+          options={{
+            animation: 'slide_from_right',
+            gestureEnabled: true,
+          }}
+        />
+        <Stack.Screen
+          name="Folders"
+          component={FoldersScreen}
+          options={{
+            animation: 'slide_from_right',
+            gestureEnabled: true,
+          }}
+        />
         <Stack.Screen
           name="Settings"
           component={SettingsScreen}

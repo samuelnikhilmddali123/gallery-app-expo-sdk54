@@ -46,7 +46,7 @@ const AnimatedIonicons = Animated.createAnimatedComponent(Ionicons);
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
-const GAP = 3;
+const GAP = 12;
 const ITEM_SIZE = (width - GAP * (NUM_COLUMNS + 1)) / NUM_COLUMNS;
 
 // Helper function for video duration
@@ -1356,8 +1356,15 @@ const styles = StyleSheet.create({
   item: {
     width: ITEM_SIZE,
     height: ITEM_SIZE,
-    margin: GAP / 2,
+    marginVertical: GAP / 2,
+    marginHorizontal: GAP / 2,
     overflow: 'hidden',
+    borderRadius: 16,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   image: {
     width: '100%',
@@ -1365,17 +1372,17 @@ const styles = StyleSheet.create({
   },
   videoBadge: {
     position: 'absolute',
-    bottom: 6,
-    right: 6,
+    bottom: 8,
+    right: 8,
     width: 24,
     height: 24,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 4,
+    borderRadius: 12,
   },
   itemSelected: {
-    opacity: 1,
+    transform: [{ scale: 0.95 }],
   },
   selectionOverlay: {
     position: 'absolute',
@@ -1383,15 +1390,18 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 122, 255, 0.3)',
+    backgroundColor: 'rgba(123, 97, 255, 0.2)',
+    borderWidth: 3,
+    borderColor: '#7B61FF',
+    borderRadius: 16,
   },
   checkBadge: {
     position: 'absolute',
-    top: 6,
-    right: 6,
+    top: 8,
+    right: 8,
     width: 24,
     height: 24,
-    backgroundColor: '#007AFF',
+    backgroundColor: '#7B61FF',
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1403,8 +1413,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 15,
   },
   cancelButton: {
     paddingVertical: 4,
@@ -1412,18 +1422,19 @@ const styles = StyleSheet.create({
   },
   cancelText: {
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
+    color: '#7B61FF',
   },
   selectionCount: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '700',
     flex: 1,
     textAlign: 'center',
   },
   selectionActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 15,
   },
   selectionActionButton: {
     padding: 4,
@@ -1446,5 +1457,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     marginTop: 16,
     textAlign: 'center',
+    fontWeight: '600',
   },
 });
