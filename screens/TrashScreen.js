@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, Platform } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, Platform, Dimensions } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, withSequence } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -11,6 +12,105 @@ import { getTrashItems, restoreFromTrash, deletePermanently, isTrashSupported } 
 import { restoreMediaToVault } from '../services/vaultService';
 
 const TRASH_KEY = '@gallery_trash'; // For vault items only
+
+const Particle = ({ i }) => {
+  const t = useSharedValue(0);
+  const xOffset = useSharedValue(Math.random() * 120 - 60);
+  const size = useSharedValue(6 + Math.random() * 8); // Larger particles
+  const opacity = useSharedValue(0);
+  
+  // Use a variety of vibrant colors
+  const colors = ['#7B61FF', '#FF61B6', '#61D8FF', '#FFBD61'];
+  const particleColor = colors[i % colors.length];
+
+  useEffect(() => {
+    t.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 2500 + Math.random() * 1500 }),
+        withTiming(0, { duration: 0 })
+      ),
+      -1,
+      false
+    );
+    opacity.value = withRepeat(
+      withSequence(
+        withTiming(0.8, { duration: 1200 }),
+        withTiming(0, { duration: 1300 })
+      ),
+      -1,
+      true
+    );
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: xOffset.value + Math.sin(t.value * Math.PI * 3) * 25 },
+      { translateY: -t.value * 220 }, // Float up higher
+      { scale: 0.5 + t.value * 0.5 }
+    ],
+    opacity: opacity.value * (1 - t.value),
+  }));
+
+  return (
+    <Animated.View 
+      style={[
+        { 
+          position: 'absolute', 
+          width: size.value, 
+          height: size.value, 
+          borderRadius: size.value / 2, 
+          backgroundColor: particleColor,
+          elevation: 4,
+          shadowColor: particleColor,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.8,
+          shadowRadius: 10,
+        },
+        animatedStyle
+      ]} 
+    />
+  );
+};
+
+const EmptyTrashView = ({ colors }) => {
+  const scale = useSharedValue(1);
+  const float = useSharedValue(0);
+
+  useEffect(() => {
+    scale.value = withRepeat(
+      withSequence(withTiming(1.25, { duration: 1200 }), withTiming(1, { duration: 1200 })),
+      -1,
+      true
+    );
+    float.value = withRepeat(
+      withSequence(withTiming(-20, { duration: 2000 }), withTiming(0, { duration: 2000 })),
+      -1,
+      true
+    );
+  }, []);
+
+  const iconStyle = useAnimatedStyle(() => ({
+    transform: [
+        { scale: scale.value },
+        { translateY: float.value }
+    ],
+  }));
+
+  return (
+    <View style={styles.emptyContainer}>
+      <View style={styles.particleField}>
+        {[...Array(25)].map((_, i) => (
+          <Particle key={i} i={i} />
+        ))}
+      </View>
+      <Animated.View style={[styles.emptyIconContainer, iconStyle]}>
+        <Ionicons name="trash-outline" size={120} color={colors.primary} />
+      </Animated.View>
+      <Text style={[styles.emptyTitle, { color: colors.text, marginTop: 40 }]}>Bin is Crystal Clear</Text>
+      <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>Your future deleted memories will live here temporarily.</Text>
+    </View>
+  );
+};
 
 // Memoized TrashItem component for performance
 const TrashItem = React.memo(({ item, index, isSelected, onPress, onLongPress, colors }) => {
@@ -627,14 +727,7 @@ export default function TrashScreen({ navigation }) {
         maxToRenderPerBatch={10}
         updateCellsBatchingPeriod={50}
         initialNumToRender={15}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="trash-outline" size={64} color={colors.searchPlaceholder} />
-            <Text style={[styles.emptyText, { color: colors.searchPlaceholder }]}>
-              Trash is empty
-            </Text>
-          </View>
-        }
+        ListEmptyComponent={<EmptyTrashView colors={colors} />}
       />
     </SafeAreaView>
   );
@@ -759,12 +852,35 @@ const styles = StyleSheet.create({
   },
   emptyContainer: {
     flex: 1,
+    height: 400,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
   },
-  emptyText: {
-    fontSize: 16,
-    marginTop: 16,
+  particleField: {
+    position: 'absolute',
+    width: 200,
+    height: 200,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  emptyIconContainer: {
+    width: 150,
+    height: 150,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+    paddingHorizontal: 40,
+    opacity: 0.6,
+  },
+
 });

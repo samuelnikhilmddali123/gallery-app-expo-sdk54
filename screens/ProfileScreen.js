@@ -27,6 +27,12 @@ export default function ProfileScreen({ navigation }) {
         }
         loadSystemAlbums();
         
+        // Persistent Profile Image
+        const storedImage = await require('@react-native-async-storage/async-storage').default.getItem('gallery_profile_image');
+        if (storedImage) {
+           setProfileImage(storedImage);
+        }
+
         // Persistent Profile Name
         const storedName = await require('@react-native-async-storage/async-storage').default.getItem('gallery_profile_name');
         if (storedName) {
@@ -36,7 +42,7 @@ export default function ProfileScreen({ navigation }) {
       };
       fetchData();
     }, [])
-  );
+);
 
   const loadSystemAlbums = async () => {
     try {
@@ -81,7 +87,24 @@ export default function ProfileScreen({ navigation }) {
       quality: 0.8,
     });
     if (!result.canceled) {
-      setProfileImage(result.assets[0].uri);
+      const uri = result.assets[0].uri;
+      
+      try {
+        const FileSystem = require('expo-file-system');
+        const filename = `profile_picture_${Date.now()}.jpg`;
+        const dest = `${FileSystem.documentDirectory}${filename}`;
+        
+        // Copy to permanent storage
+        await FileSystem.copyAsync({ from: uri, to: dest });
+        
+        setProfileImage(dest);
+        await require('@react-native-async-storage/async-storage').default.setItem('gallery_profile_image', dest);
+      } catch (e) {
+        console.error('Failed to save profile picture', e);
+        // Fallback to original URI if copy fails
+        setProfileImage(uri);
+        await require('@react-native-async-storage/async-storage').default.setItem('gallery_profile_image', uri);
+      }
     }
   };
 

@@ -221,7 +221,9 @@ export const moveMediaToAppTrash = async (mediaItem) => {
     if (mediaItem.id && !mediaItem.id.toString().startsWith('vault_') && !mediaItem.id.toString().startsWith('picked_')) {
       try {
         const asset = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
-        sourceUri = asset.localUri || asset.uri;
+        if (asset) {
+          sourceUri = asset.localUri || asset.uri;
+        }
       } catch (e) {
         console.log('Could not get MediaLibrary asset info', e);
       }

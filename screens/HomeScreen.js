@@ -10,8 +10,11 @@ import {
   TextInput,
   Alert,
   Platform,
+  LayoutAnimation,
+  UIManager,
   AppState,
   ScrollView,
+  RefreshControl,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -21,7 +24,11 @@ import Animated, {
   withTiming,
   interpolateColor,
   Easing,
-  cancelAnimation
+  cancelAnimation,
+  withSpring,
+  LinearTransition,
+  FadeIn,
+  FadeOut
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -36,13 +43,15 @@ import { useDialog } from '../contexts/DialogContext';
 
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
-import { useSearch } from '../contexts/SearchContext';
 import { getFolders, addMediaToFolder } from '../services/folderService';
 import { CATEGORIES, categorizeMedia } from '../services/categorizationService';
 import { filterVaultMedia, moveMediaToVault, saveMediaCache, loadMediaCache } from '../services/mediaService';
 import { moveMediaToAppTrash } from '../services/trashService';
 
-const AnimatedIonicons = Animated.createAnimatedComponent(Ionicons);
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
@@ -76,46 +85,86 @@ const getAllMedia = async () => {
 };
 
 // Memoized MediaItem component for performance - defined outside to avoid hooks issues
-const MediaItem = React.memo(({ item, index, isSelected, onPress, onLongPress, colors }) => {
+const MediaItem = React.memo(({ item, index, isSelected, isDeleting, deletionType, onPress, onLongPress }) => {
+  // Extremely optimized single-binding animation engine (restores physics without lag)
+  const deleteProgress = useSharedValue(0);
+
+  useEffect(() => {
+    if (isDeleting) {
+      if (deletionType === 'trash') {
+        // Fast fade-out for trash
+        deleteProgress.value = withTiming(1, { duration: 300 });
+      } else {
+        // Epic spin-shrink for permanent delete
+        deleteProgress.value = withTiming(2, { duration: 600, easing: Easing.bezier(0.2, 0.64, 0.21, 1) });
+      }
+    }
+  }, [isDeleting, deletionType]);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    const scaleBase = isSelected ? 0.92 : 1;
+    
+    if (deleteProgress.value === 0) {
+      // Default State (0 JS bindings triggered)
+      return { opacity: 1, transform: [{ scale: scaleBase }] };
+    }
+    
+    if (deleteProgress.value <= 1) {
+      // Trash state (fade out)
+      return { opacity: 1 - deleteProgress.value, transform: [{ scale: scaleBase }] };
+    }
+    
+    // Permanent Delete state (Fly out physics)
+    const p = deleteProgress.value - 1; 
+    return {
+      opacity: 1 - (p * 0.8),
+      transform: [
+        { translateY: p * 60 },
+        { scale: scaleBase * (1 - p) },
+        { rotate: `${p * 180}deg` }
+      ]
+    };
+  });
+
   return (
-    <TouchableOpacity
-      activeOpacity={0.9}
-      style={[
-        styles.item,
-        { backgroundColor: colors.itemBackground },
-        isSelected && styles.itemSelected
-      ]}
-      onPress={onPress}
-      onLongPress={onLongPress}
-    >
-      <Image
-        source={{ uri: item.uri }}
-        style={styles.image}
-        contentFit="cover"
-        transition={0} // Step 4.2: Optimize thumbnails
-        cachePolicy="memory-disk"
-        key={`${item.id}_${item.uri}`}
-      />
-
-      {/* Light blue overlay when selected */}
-      {isSelected && (
-        <View style={styles.selectionOverlay} />
-      )}
-
-      {/* Check icon at top-right when selected */}
-      {isSelected && (
-        <View style={styles.checkBadge}>
-          <Ionicons name="checkmark" size={18} color="#fff" />
-        </View>
-      )}
-
-      {/* Safer condition to avoid rendering '0' text */}
-      {!!(item.mediaType === 'video' || item.mediaType === MediaLibrary.MediaType.video || (item.duration && item.duration > 0)) && (
+    <Animated.View style={[styles.item, animatedStyle]}>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => onPress(item, index)}
+        onLongPress={() => onLongPress(item)}
+        style={{ flex: 1 }}
+      >
+        <Image
+          source={{ uri: item.uri }}
+          style={styles.image}
+          contentFit="cover"
+          transition={150} // Subtle fade-in for smoothness
+          cachePolicy="memory-disk"
+          key={item.id} // ID is enough
+        />
+        {isSelected && (
+          <View style={styles.selectionOverlay} />
+        )}
+        {isSelected && (
+          <View style={styles.checkBadge}>
+            <Ionicons name="checkmark" size={16} color="#fff" />
+          </View>
+        )}
+      </TouchableOpacity>
+      {!!(item.mediaType === 'video' || item.duration > 0) && (
         <View style={styles.videoBadge}>
-          <Ionicons name="play" size={16} color="#fff" />
+            <Text style={styles.durationText}>{formatDuration(item.duration)}</Text>
         </View>
       )}
-    </TouchableOpacity>
+    </Animated.View>
+  );
+}, (prevProps, nextProps) => {
+  // STRICT equality check to absolutely prevent re-renders unless fundamentally changed
+  return (
+    prevProps.item.id === nextProps.item.id &&
+    prevProps.isSelected === nextProps.isSelected &&
+    prevProps.isDeleting === nextProps.isDeleting &&
+    prevProps.deletionType === nextProps.deletionType
   );
 });
 
@@ -123,7 +172,7 @@ export default function HomeScreen({ navigation, route }) {
   // All hooks must be called before any conditional returns
   const { colors } = useTheme();
   const { isVaultSetup, verifyPassword, unlockVault, isVaultUnlocked } = useVault();
-  const { searchQuery, setSearchQuery } = useSearch();
+  const [searchQuery, setSearchQuery] = useState('');
   const [media, setMedia] = useState([]);
   const [albums, setAlbums] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -141,6 +190,8 @@ export default function HomeScreen({ navigation, route }) {
   const [categorizedMedia, setCategorizedMedia] = useState({});
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [isFirstLaunch, setIsFirstLaunch] = useState(false);
+  const [deletingItems, setDeletingItems] = useState(new Set());
+  const [lastDeletionType, setLastDeletionType] = useState('trash'); // 'trash' | 'vault' | 'delete'
 
   // Pagination & Loading
   const [pageInfo, setPageInfo] = useState({ hasNextPage: true, endCursor: undefined });
@@ -151,6 +202,12 @@ export default function HomeScreen({ navigation, route }) {
 
   // Ref to track if we've loaded initial data
   const dataLoadedRef = useRef(false);
+  // Ref for stable callbacks
+  const filteredMediaRef = useRef([]);
+  
+  useEffect(() => {
+    filteredMediaRef.current = activeMediaList;
+  }, [activeMediaList]);
 
   // Load All System Data (Albums, Folders)
   const loadAllData = useCallback(async () => {
@@ -173,13 +230,13 @@ export default function HomeScreen({ navigation, route }) {
     try {
       const cachedMedia = await loadMediaCache();
       if (cachedMedia && cachedMedia.length > 0) {
-        console.log(`HomeScreen: Loaded ${cachedMedia.length} items from cache`);
+        // console.log(`HomeScreen: Loaded ${cachedMedia.length} items from cache`);
         setMedia(cachedMedia);
         dataLoadedRef.current = true;
         // Start categorization for cached items too
         startCategorization(cachedMedia);
       } else {
-        console.log("HomeScreen: No cache found, marking as first launch");
+        // console.log("HomeScreen: No cache found, marking as first launch");
         setIsFirstLaunch(true);
       }
     } catch (error) {
@@ -270,7 +327,7 @@ export default function HomeScreen({ navigation, route }) {
 
         // Force load if empty (e.g. first time access via Vault) - but don't show loader
         if (media.length === 0) {
-          console.log('Media empty in Vault Add mode - forcing load without loader');
+          // console.log('Media empty in Vault Add mode - forcing load without loader');
           // loadGallery(false); // Helper function not available, rely on loadAllData
           loadAllData();
         }
@@ -297,7 +354,7 @@ export default function HomeScreen({ navigation, route }) {
         try {
           // 1. Handle explicit cropped asset return (existing logic)
           if (route?.params?.croppedAsset) {
-            console.log("HomeScreen: Focused with croppedAsset param", route.params);
+            // console.log("HomeScreen: Focused with croppedAsset param", route.params);
             const { croppedAsset } = route.params;
 
             // Clear the params immediately
@@ -344,7 +401,7 @@ export default function HomeScreen({ navigation, route }) {
               const newItems = latestAssets.filter(asset => !existingHeadIds.has(asset.id));
 
               if (newItems.length > 0) {
-                console.log(`HomeScreen: Found ${newItems.length} new incoming assets via sync.`);
+                // console.log(`HomeScreen: Found ${newItems.length} new incoming assets via sync.`);
                 // Prepend new items
                 return [...newItems, ...prev];
               }
@@ -354,7 +411,7 @@ export default function HomeScreen({ navigation, route }) {
           }
 
         } catch (error) {
-          console.warn("HomeScreen: Incremental sync failed", error);
+          // console.warn("HomeScreen: Incremental sync failed", error);
         }
       };
 
@@ -364,7 +421,7 @@ export default function HomeScreen({ navigation, route }) {
       // Also listen for AppState changes to handle returning from background (e.g. after screenshot)
       const subscription = AppState.addEventListener('change', nextAppState => {
         if (nextAppState === 'active') {
-          console.log('HomeScreen: App active - Triggering incremental sync');
+          // console.log('HomeScreen: App active - Triggering incremental sync');
           syncNewMedia();
         }
       });
@@ -408,14 +465,17 @@ export default function HomeScreen({ navigation, route }) {
         return newSet;
       });
     } else {
-      // Normal behavior - open viewer
+      // Normal behavior - open viewer. Dynamically calculate index to bypass React.memo rendering stales
+      const realIndex = filteredMediaRef.current.findIndex(m => m.id === item.id);
+      console.log("Tapped:", item.id, item.uri);
       navigation.navigate('Viewer', {
         item,
-        allItems: filteredMedia,
-        initialIndex: index
+        allItems: filteredMediaRef.current, // Use ref for stable callback
+        initialIndex: realIndex >= 0 ? realIndex : index,
+        selectedId: item.id
       });
     }
-  }, [filteredMedia, navigation]);
+  }, [navigation]); // Removed filteredMedia dependency
 
   const exitSelectionMode = useCallback(() => {
     setIsSelectionMode(false);
@@ -465,8 +525,8 @@ export default function HomeScreen({ navigation, route }) {
         return;
       }
 
-      console.log(`HomeScreen: Sharing ${uris.length} items via NativeModules.MultiShare`);
-      console.log('Available NativeModules:', Object.keys(NativeModules)); // Debug: List all modules
+      // console.log(`HomeScreen: Sharing ${uris.length} items via NativeModules.MultiShare`);
+      // console.log('Available NativeModules:', Object.keys(NativeModules)); // Debug: List all modules
 
       // Exit selection mode
       exitSelectionMode();
@@ -475,7 +535,7 @@ export default function HomeScreen({ navigation, route }) {
       if (NativeModules.MultiShare) {
         await NativeModules.MultiShare.shareImages(uris);
       } else {
-        console.warn('NativeModules.MultiShare not found, falling back to basic sharing');
+        // console.warn('NativeModules.MultiShare not found, falling back to basic sharing');
         // Handle fallback if needed, but here we expect the module to exist
       }
 
@@ -509,78 +569,99 @@ export default function HomeScreen({ navigation, route }) {
           text: 'Trash',
           style: 'default',
           onPress: async () => {
-            try {
-              setLoading(true);
-              const deletedIds = [];
-              const mediaLibraryIds = [];
+             // NO animation before native dialog
+             try {
+                const mediaLibraryIds = selectedMedia
+                  .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
+                  .map(item => item.id);
 
-              // Step 1: Copy all items to trash
-              for (const item of selectedMedia) {
-                try {
-                  const result = await moveMediaToAppTrash(item);
-                  if (result) {
-                    deletedIds.push(item.id.toString());
-                    if (item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_')) {
-                      mediaLibraryIds.push(item.id);
-                    }
-                  }
-                } catch (trashError) {
-                  console.error('Error copying item to trash:', item.id, trashError);
+                let deleteSuccessful = true;
+                if (mediaLibraryIds.length > 0) {
+                   const { status } = await MediaLibrary.requestPermissionsAsync();
+                   if (status !== 'granted') return;
+                   
+                   // STEP 1: Copy to trash folder BEFORE we lose the original file
+                   const deletedIds = [];
+                   for (const item of selectedMedia) {
+                      try {
+                         const result = await moveMediaToAppTrash(item);
+                         if (result) deletedIds.push(item.id.toString());
+                      } catch (e) { console.error(e); }
+                   }
+
+                   // STEP 2: Trigger the Android native "Allow delete?" dialog
+                   deleteSuccessful = await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                   
+                   if (deleteSuccessful) {
+                      // 😍 STEP 3: Animation ONLY after user clicked "Allow"
+                      const selectedIds = Array.from(selectedItems);
+                      setLastDeletionType('trash');
+                      setDeletingItems(new Set(selectedIds));
+
+                      // Wait for animation
+                      await new Promise(r => setTimeout(r, 400));
+
+                      // Final UI Sync
+                      // Apply smooth layout reflow using the IDs we actually just asked Android to delete
+                      setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                      exitSelectionMode();
+                   }
+                } else {
+                   // Vault items or other non-MediaLibrary items
+                   const selectedIds = Array.from(selectedItems);
+                   setLastDeletionType('trash');
+                   setDeletingItems(new Set(selectedIds));
+                   await new Promise(r => setTimeout(r, 400));
+                   setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                   exitSelectionMode();
                 }
-              }
-
-              // Step 2: Delete from MediaLibrary
-              if (mediaLibraryIds.length > 0) {
-                const { status } = await MediaLibrary.requestPermissionsAsync();
-                if (status === 'granted') {
-                  await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
-                }
-              }
-
-              // Step 3: Update UI
-              if (deletedIds.length > 0) {
-                setMedia(prev => prev.filter(item => !deletedIds.includes(item.id.toString())));
-              }
-
-              exitSelectionMode();
-            } catch (error) {
-              console.error('Error in trash operation:', error);
-              showAlert('Error', 'Failed to move items to trash');
-            } finally {
-              setLoading(false);
-            }
+             } catch (error) {
+                console.error('Error:', error);
+                showAlert('Error', 'Deletetion failed');
+             } finally {
+                setDeletingItems(new Set());
+                setLoading(false);
+             }
           }
         },
         {
           text: 'Permanently delete',
           style: 'destructive',
           onPress: async () => {
-            try {
-              setLoading(true);
-              const mediaLibraryIds = selectedMedia
-                .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
-                .map(item => item.id);
+             try {
+                const mediaLibraryIds = selectedMedia
+                  .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
+                  .map(item => item.id);
 
-              if (mediaLibraryIds.length > 0) {
-                const { status } = await MediaLibrary.requestPermissionsAsync();
-                if (status === 'granted') {
-                  const success = await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
-                  if (success) {
-                    setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
-                  }
+                let deleteSuccessful = true;
+                if (mediaLibraryIds.length > 0) {
+                   const { status } = await MediaLibrary.requestPermissionsAsync();
+                   if (status !== 'granted') return;
+
+                   // THIS will trigger the Android native "Allow delete?" dialog
+                   deleteSuccessful = await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
                 }
-              } else {
-                // If no media library IDs (e.g. vault items), just remove from UI
-                setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
-              }
 
-              exitSelectionMode();
-            } catch (error) {
-              console.error('Error in permanent delete:', error);
-              showAlert('Error', 'Failed to delete items permanently');
-            } finally {
-              setLoading(false);
-            }
+                if (deleteSuccessful) {
+                   // 💣 STEP 1: Epic Animation after native confirmation
+                   const selectedIds = Array.from(selectedItems);
+                   setLastDeletionType('delete');
+                   setDeletingItems(new Set(selectedIds));
+
+                   // Wait for longer rotation/scale/float animation
+                   await new Promise(r => setTimeout(r, 700));
+
+                   // STEP 2: Update UI
+                   setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                   exitSelectionMode();
+                }
+             } catch (error) {
+                console.error(error);
+                showAlert('Error', 'Deletion failed');
+             } finally {
+                setDeletingItems(new Set());
+                setLoading(false);
+             }
           }
         },
         {
@@ -638,7 +719,7 @@ export default function HomeScreen({ navigation, route }) {
 
       // 3. Rollback if Delete Failed
       if (!deleteSuccess && validAssetsToDelete.length > 0) {
-        console.log('System delete denied or failed. Rolling back vault copies...');
+        // console.log('System delete denied or failed. Rolling back vault copies...');
         for (const vaultItem of addedVaultItems) {
           await removeMediaFromVault(vaultItem.id);
         }
@@ -685,25 +766,9 @@ export default function HomeScreen({ navigation, route }) {
     }
   }, [selectedItems, filteredMedia, targetFolderId, exitSelectionMode]);
 
-  const renderItem = useCallback(({ item, index }) => {
-    const itemId = item.id.toString();
-    const isSelected = selectedItems.has(itemId);
 
-    return (
-      <MediaItem
-        item={item}
-        index={index}
-        isSelected={isSelected}
-        onPress={() => handleItemPress(item, index)}
-        onLongPress={() => handleLongPress(item)}
-        colors={colors}
-      />
-    );
-  }, [selectedItems, handleItemPress, handleLongPress, colors]);
-
-  const keyExtractor = useCallback((item, index) => {
-    // Include URI in key to force re-render when image changes
-    return `${item?.id?.toString() || `media-${index}`}_${item?.uri || ''}`;
+  const keyExtractor = useCallback((item) => {
+    return item?.id?.toString() || `media-${Math.random()}`;
   }, []);
 
 
@@ -714,21 +779,21 @@ export default function HomeScreen({ navigation, route }) {
 
       // RESET pagination & cache if requested (CRITICAL for refresh)
       if (reset) {
-        console.log("HomeScreen: RESETTING gallery state...");
+        // console.log("HomeScreen: RESETTING gallery state...");
         setMedia([]);
         setPageInfo({ hasNextPage: true, endCursor: undefined });
       }
 
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
-        console.log('Permission not granted');
+        // console.log('Permission not granted');
         if (showLoader) setLoading(false);
         return;
       }
 
       if (!reset) setLoadingMore(true);
 
-      console.log("HomeScreen: Loading batch of media (all types)...");
+      // console.log("HomeScreen: Loading batch of media (all types)...");
 
       const fetchCount = 100; // Efficient batch size for combined fetch
       const currentCursor = reset ? undefined : pageInfo.endCursor;
@@ -755,13 +820,13 @@ export default function HomeScreen({ navigation, route }) {
         return;
       }
 
-      console.log("HomeScreen: Loaded batch of", result.assets.length, "items");
+      // console.log("HomeScreen: Loaded batch of", result.assets.length, "items");
       if (result.assets.length > 0) {
-        console.log("HomeScreen: Top item metadata:", {
-          id: result.assets[0].id,
-          creationTime: result.assets[0].creationTime,
-          modificationTime: result.assets[0].modificationTime
-        });
+        // console.log("HomeScreen: Top item metadata:", {
+        //   id: result.assets[0].id,
+        //   creationTime: result.assets[0].creationTime,
+        //   modificationTime: result.assets[0].modificationTime
+        // });
       }
 
       // Normalize media types and add fallback sort markers
@@ -811,17 +876,18 @@ export default function HomeScreen({ navigation, route }) {
   const handleLoadMore = () => {
     if (loadingMore || loading) return;
     if (pageInfo.hasNextPage) {
-      console.log("HomeScreen: Triggering loadMore (unified)...");
+      // console.log("HomeScreen: Triggering loadMore (unified)...");
       loadGallery(false, false);
     }
   };
 
   const handleRefresh = useCallback(async () => {
-    console.log("HomeScreen: Pull-to-refresh triggered");
     setRefreshing(true);
     await loadGallery(false, true); // reset = true
     setRefreshing(false);
-  }, []);
+  }, [loadGallery]);
+
+
 
   useEffect(() => {
     // Skip loading gallery if entering for vault add (assume media already loaded or handled)
@@ -849,16 +915,16 @@ export default function HomeScreen({ navigation, route }) {
   // The UI already updates instantly by filtering deleted items from state
   /*
   useEffect(() => {
-    console.log("HomeScreen: Setting up MediaLibrary listener...");
+    // console.log("HomeScreen: Setting up MediaLibrary listener...");
    
     const subscription = MediaLibrary.addListener(() => {
-      console.log("HomeScreen: MediaLibrary changed! Auto-refreshing...");
+      // console.log("HomeScreen: MediaLibrary changed! Auto-refreshing...");
       // Refresh gallery when new photos are added
       loadGallery(false, true); // reset = true to get latest photos
     });
    
     return () => {
-      console.log("HomeScreen: Removing MediaLibrary listener");
+      // console.log("HomeScreen: Removing MediaLibrary listener");
       subscription.remove();
     };
   }, []);
@@ -902,56 +968,10 @@ export default function HomeScreen({ navigation, route }) {
     return () => clearTimeout(timeoutId);
   }, [searchQuery, isVaultSetup, isVaultUnlocked, verifyPassword, unlockVault, navigation]);
 
-  // --- Rainbow Animation Logic ---
-  const rainbowProgress = useSharedValue(0);
 
-  useEffect(() => {
-    if (isVaultSetup) {
-      // Start animation loop when vault exists (is setup)
-      rainbowProgress.value = withRepeat(
-        withTiming(1, { duration: 3000, easing: Easing.linear }),
-        -1, // Infinite
-        false // Do not reverse, just loop 0->1
-      );
-    } else {
-      // Stop and reset immediately if vault is deleted (not setup)
-      cancelAnimation(rainbowProgress);
-      rainbowProgress.value = 0;
-    }
-  }, [isVaultSetup]);
-
-  const animatedSearchIconProps = useAnimatedProps(() => {
-    // Return default color if vault is not setup
-    if (!isVaultSetup) {
-      return {
-        color: colors.searchPlaceholder,
-      };
-    }
-
-    const rainbowColors = [
-      '#FF0000', // Red
-      '#FF7F00', // Orange
-      '#FFFF00', // Yellow
-      '#00FF00', // Green
-      '#0000FF', // Blue
-      '#4B0082', // Indigo
-      '#9400D3', // Violet
-      '#FF0000', // Back to Red for smooth loop
-    ];
-
-    const color = interpolateColor(
-      rainbowProgress.value,
-      [0, 0.14, 0.28, 0.42, 0.57, 0.71, 0.85, 1],
-      rainbowColors
-    );
-
-    return {
-      color: color,
-    };
-  }, [isVaultSetup, colors]);
 
   const handleMenuPress = () => {
-    console.log('Menu button pressed');
+    // console.log('Menu button pressed');
     setMenuAnchorPosition({
       x: 16,
       y: 60,
@@ -963,17 +983,6 @@ export default function HomeScreen({ navigation, route }) {
     setMenuVisible(false);
 
     switch (optionId) {
-      case 'calendar':
-        navigation.navigate('Calendar');
-        break;
-      case 'settings':
-        setTimeout(() => {
-          setSettingsPanelVisible(true);
-        }, 100);
-        break;
-      case 'trash':
-        navigation.navigate('Trash');
-        break;
       case 'select':
         setIsSelectionMode(true);
         setSelectionPurpose(undefined);
@@ -984,6 +993,21 @@ export default function HomeScreen({ navigation, route }) {
   };
 
 
+
+  const renderItem = useCallback(({ item, index }) => {
+    const itemId = item.id.toString();
+    return (
+      <MediaItem
+        item={item}
+        index={index}
+        isSelected={selectedItems.has(itemId)}
+        isDeleting={deletingItems.has(itemId)}
+        deletionType={lastDeletionType}
+        onPress={handleItemPress}
+        onLongPress={handleLongPress}
+      />
+    );
+  }, [selectedItems, deletingItems, lastDeletionType, handleItemPress, handleLongPress]);
 
   // Show full-screen loader ONLY if it's the first launch AND we have no data yet
   if (loading && media.length === 0) {
@@ -1001,9 +1025,10 @@ export default function HomeScreen({ navigation, route }) {
     );
   }
 
+
   const renderContent = () => {
     // Search Results View
-    if (searchResults.isSearching) {
+    if (searchQuery.length > 0) {
       const hasAlbums = searchResults.albums.length > 0;
       const hasFolders = searchResults.folders.length > 0;
       const hasMedia = searchResults.media.length > 0;
@@ -1011,7 +1036,7 @@ export default function HomeScreen({ navigation, route }) {
 
       if (isEmpty) {
         return (
-          <View style={styles.emptyContainer}>
+          <View style={[styles.emptyContainer, { flex: 1, marginTop: 100 }]}>
             <Ionicons name="search-outline" size={64} color={colors.searchPlaceholder} />
             <Text style={[styles.emptyText, { color: colors.searchPlaceholder }]}>
               No items found
@@ -1087,19 +1112,22 @@ export default function HomeScreen({ navigation, route }) {
                       item={item}
                       index={index}
                       isSelected={isSelected}
+                      isDeleting={deletingItems.has(itemId)}
+                      deletionType={lastDeletionType}
                       onPress={() => {
                         if (isSelectionMode) {
                           handleItemPress(item, index);
                         } else {
+                          console.log("Tapped:", item.id, item.uri);
                           navigation.navigate('Viewer', {
                             item,
                             allItems: searchResults.media,
-                            initialIndex: index
+                            initialIndex: searchResults.media.findIndex(m => m.id === item.id),
+                            selectedId: item.id
                           });
                         }
                       }}
                       onLongPress={() => handleLongPress(item)}
-                      colors={colors}
                     />
                   );
                 })}
@@ -1115,27 +1143,25 @@ export default function HomeScreen({ navigation, route }) {
     return (
       <FlatList
         data={filteredMedia}
-        keyExtractor={keyExtractor}
+        keyExtractor={m => m.id}
         numColumns={NUM_COLUMNS}
         renderItem={renderItem}
-        showsVerticalScrollIndicator={false}
         contentContainerStyle={[
-          styles.grid,
-          filteredMedia.length === 0 && { flex: 1 }
+          styles.grid, 
+          filteredMedia.length === 0 && { flexGrow: 1, justifyContent: 'center' }
         ]}
-        extraData={{ isSelectionMode, selectedItems }}
-        refreshing={refreshing}
-        onRefresh={handleRefresh}
+        removeClippedSubviews={Platform.OS === 'android'} // VITAL for Android memory
+        initialNumToRender={24}
+        windowSize={7} // Balanced memory buffer
+        maxToRenderPerBatch={6} // Tiny 6-item chunks for uninterrupted scrolling
+        updateCellsBatchingPeriod={10} // Process tiny chunks aggressively fast
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.5}
-        windowSize={5}
-        removeClippedSubviews={true}
-        maxToRenderPerBatch={10}
-        updateCellsBatchingPeriod={50}
-        initialNumToRender={15}
         ListEmptyComponent={
           !loading && (
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            <View style={styles.emptyContainer}>
+              <Ionicons name="image-outline" size={64} color={colors.text} style={{ opacity: 0.2, marginBottom: 16 }} />
               <Text style={{ fontSize: 18, color: colors.text, opacity: 0.6 }}>No photos found</Text>
             </View>
           )
@@ -1202,10 +1228,10 @@ export default function HomeScreen({ navigation, route }) {
                 styles.searchBar,
                 { backgroundColor: colors.searchBar }
               ]}>
-                <AnimatedIonicons
+                <Ionicons
                   name="search"
                   size={16}
-                  animatedProps={animatedSearchIconProps}
+                  color={colors.searchPlaceholder}
                 />
                 <TextInput
                   value={searchQuery}
@@ -1223,11 +1249,10 @@ export default function HomeScreen({ navigation, route }) {
                 )}
               </View>
               <TouchableOpacity
-                ref={menuButtonRef}
-                onPress={handleMenuPress}
-                style={styles.menuButton}
+                onPress={() => setSettingsPanelVisible(true)}
+                style={styles.drawerButton}
               >
-                <Ionicons name="ellipsis-vertical" size={22} color={colors.icon} />
+                <Ionicons name="menu-outline" size={26} color={colors.icon} />
               </TouchableOpacity>
             </View>
           )}
@@ -1335,6 +1360,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 8,
   },
+  drawerButton: {
+    padding: 6,
+    marginRight: 4,
+  },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1355,7 +1384,8 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   grid: {
-    padding: GAP,
+    padding: GAP / 2, // Adjusted for perfect edge-to-edge
+    paddingTop: GAP,
   },
   item: {
     width: ITEM_SIZE,
@@ -1364,11 +1394,7 @@ const styles = StyleSheet.create({
     marginHorizontal: GAP / 2,
     overflow: 'hidden',
     borderRadius: 16,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    backgroundColor: 'rgba(150, 150, 150, 0.2)', // Placeholder background
   },
   image: {
     width: '100%',

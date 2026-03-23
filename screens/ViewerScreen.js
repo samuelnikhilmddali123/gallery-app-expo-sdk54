@@ -631,12 +631,15 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     }
   }, [player, isActive]);
 
-  // 3. Listeners
+  // 3. Listeners & Time Tracking
   useEffect(() => {
     if (!player) return;
 
-    // Time Tracking Listener
+    let interval;
+
+    // Time Tracking Listener - Primary source
     const timeUpdateSub = player.addListener('timeUpdate', ({ currentTime: pos }) => {
+      // expo-video provides seconds (float)
       setCurrentTime(pos);
       if (videoStates?.current?.[mediaItem.id]) {
         videoStates.current[mediaItem.id].currentTime = pos;
@@ -647,8 +650,21 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     const playingSub = player.addListener('playingChange', ({ isPlaying: isPlayingNow }) => {
       console.log(`VideoContent: playingChange: ${isPlayingNow}`);
       setIsPlaying(isPlayingNow);
+      
       if (videoStates?.current?.[mediaItem.id]) {
         videoStates.current[mediaItem.id].isPlaying = isPlayingNow;
+      }
+
+      // Start/Stop fallback polling for smoother UI timer
+      if (isPlayingNow) {
+        if (interval) clearInterval(interval);
+        interval = setInterval(() => {
+          if (player && player.playing) {
+            setCurrentTime(player.currentTime);
+          }
+        }, 500); // Update every 500ms
+      } else {
+        if (interval) clearInterval(interval);
       }
     });
 
@@ -664,8 +680,13 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
         if (cachedTime > 0.1 && !hasRestoredRef.current) {
           console.log(`VideoContent: Restoring playback to ${cachedTime}`);
-          player.seekBy(cachedTime - player.currentTime);
-          hasRestoredRef.current = true;
+          // Use a small delay to ensure player is truly ready for seeking
+          setTimeout(() => {
+            if (player) {
+              player.seekBy(cachedTime - player.currentTime);
+              hasRestoredRef.current = true;
+            }
+          }, 100);
         }
       }
     });
@@ -674,13 +695,20 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     if (player.duration > 0) {
       setDuration(player.duration);
     }
-    // Correctly reflect current player state immediately
+    
+    // Set initial playing state
     setIsPlaying(player.playing);
+    if (player.playing) {
+      interval = setInterval(() => {
+        if (player) setCurrentTime(player.currentTime);
+      }, 500);
+    }
 
     return () => {
       timeUpdateSub.remove();
       playingSub.remove();
       statusSub.remove();
+      if (interval) clearInterval(interval);
     };
   }, [player, videoUri, mediaItem.id]);
 
@@ -1032,13 +1060,26 @@ MediaItem.displayName = 'MediaItem';
 // --- Main Screen ---
 export default function ViewerScreen({ route, navigation: navProp }) {
   const routeParams = route?.params || {};
-  const { item, allItems, initialIndex, refreshKey, originalAssetId } = routeParams;
+  const { item, allItems, initialIndex, selectedId, refreshKey, originalAssetId } = routeParams;
   const navHook = useNavigation();
   const navigation = navHook || navProp;
 
   const [mediaItems, setMediaItems] = useState(allItems && allItems.length > 0 ? allItems : (item ? [item] : []));
-  const [currentIndex, setCurrentIndex] = useState(initialIndex || 0);
+  
+  // Find guaranteed safe start index using ID
+  const startIndex = mediaItems.findIndex(m => m.id === selectedId);
+  const resolvedInitialIndex = startIndex >= 0 ? startIndex : (initialIndex || 0);
+  
+  const [currentIndex, setCurrentIndex] = useState(resolvedInitialIndex);
   const [isZoomed, setIsZoomed] = useState(false);
+  
+  // Debug Log output exactly matching requested schema
+  const currentItemSnapshot = mediaItems[currentIndex];
+  useEffect(() => {
+    if (currentItemSnapshot) {
+      console.log("Opened:", currentItemSnapshot.id, currentItemSnapshot.uri);
+    }
+  }, [currentIndex, currentItemSnapshot]);
   const flatListRef = useRef(null);
   // Persist video playback state across rotation/re-renders
   const videoStates = useRef({});
@@ -1148,14 +1189,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
     return () => StatusBar.setHidden(false, 'fade');
   }, []);
 
-  // Scroll to initial
-  useEffect(() => {
-    if (initialIndex !== undefined && flatListRef.current && mediaItems.length > 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false });
-      }, 100);
-    }
-  }, [initialIndex, mediaItems.length]);
+  // manual redundant scroll effect removed to allow native initialScrollIndex to run unhindered
 
   // Scroll position is now handled directly in the dimension change listener
   // This effect is removed to prevent redundant scroll corrections
@@ -1321,7 +1355,11 @@ export default function ViewerScreen({ route, navigation: navProp }) {
             ref={flatListRef}
             data={mediaItems}
             renderItem={renderItem}
-            keyExtractor={item => item.id?.toString() || Math.random().toString()}
+            keyExtractor={(item, index) => {
+              if (item?.id) return item.id.toString();
+              if (item?.uri) return item.uri.toString();
+              return `viewer-item-${index}`;
+            }}
             horizontal
             pagingEnabled
             scrollEnabled={!isZoomed && (!isLandscape || isPhoto)}
@@ -1329,10 +1367,17 @@ export default function ViewerScreen({ route, navigation: navProp }) {
             onViewableItemsChanged={onViewableItemsChanged}
             viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
             getItemLayout={getItemLayout}
-            initialScrollIndex={initialIndex || 0}
-            windowSize={3}
-            maxToRenderPerBatch={2}
-            initialNumToRender={1}
+            initialScrollIndex={resolvedInitialIndex}
+            removeClippedSubviews={false} // CRITICAL for Android: Prevents neighbors from being permanently frozen un-mounted after a massive offset jump
+            windowSize={5} // Slightly larger window helps jump stabilization
+            maxToRenderPerBatch={3}
+            updateCellsBatchingPeriod={50}
+            onScrollToIndexFailed={info => {
+              const wait = new Promise(resolve => setTimeout(resolve, 300));
+              wait.then(() => {
+                flatListRef.current?.scrollToIndex({ index: info.index, animated: false });
+              });
+            }}
           />
         </Animated.View>
 
