@@ -126,6 +126,11 @@ export async function scanGalleryWithAI(mediaItems, onProgress) {
     } catch (e) {
       console.warn(`aiService: Error scanning item ${item.id}:`, e.message);
     }
+
+    // YIELD THE THREAD every 5 items to keep the UI responsive and prevent ANR
+    if (i % 5 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
   }
 
   // Cache results

@@ -1402,9 +1402,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
             viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
             getItemLayout={getItemLayout}
             initialScrollIndex={initialIndex && mediaItems.length > initialIndex ? initialIndex : 0}
-            removeClippedSubviews={false}
-            windowSize={10}
-            maxToRenderPerBatch={5}
+            removeClippedSubviews={true}
+            windowSize={3}
+            maxToRenderPerBatch={2}
             initialNumToRender={1}
             onScrollToIndexFailed={info => {
               const wait = new Promise(resolve => setTimeout(resolve, 300));

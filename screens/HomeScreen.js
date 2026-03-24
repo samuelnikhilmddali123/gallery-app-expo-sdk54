@@ -1151,8 +1151,8 @@ export default function HomeScreen({ navigation, route }) {
           filteredMedia.length === 0 && { flexGrow: 1, justifyContent: 'center' }
         ]}
         removeClippedSubviews={Platform.OS === 'android'} // VITAL for Android memory
-        initialNumToRender={24}
-        windowSize={7} // Balanced memory buffer
+        initialNumToRender={15}
+        windowSize={4} // Balanced memory buffer
         maxToRenderPerBatch={6} // Tiny 6-item chunks for uninterrupted scrolling
         updateCellsBatchingPeriod={10} // Process tiny chunks aggressively fast
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}

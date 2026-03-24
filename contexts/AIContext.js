@@ -71,9 +71,12 @@ export const AIProvider = ({ children }) => {
       const scanResults = await scanGalleryWithAI(
         allAssets.map(a => ({ id: a.id, uri: a.uri })),
         (current, total, category, id) => {
-          setProgress({ current, total });
-          if (uriLookup[id]) {
-            setLastScannedUri(uriLookup[id]);
+          // PERFORMANCE: Throttle UI updates to every 10 items to reduce re-renders
+          if (current % 10 === 0 || current === total) {
+              setProgress({ current, total });
+              if (uriLookup[id]) {
+                setLastScannedUri(uriLookup[id]);
+              }
           }
         }
       );
