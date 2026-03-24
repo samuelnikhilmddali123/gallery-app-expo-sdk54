@@ -572,8 +572,16 @@ export default function HomeScreen({ navigation, route }) {
              // NO animation before native dialog
              try {
                 const mediaLibraryIds = selectedMedia
-                  .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
-                  .map(item => item.id);
+                  .filter(item => {
+                    const idStr = (item.id || '').toString();
+                    return idStr && 
+                      !idStr.startsWith('vault_') && 
+                      !idStr.startsWith('picked_') && 
+                      !idStr.startsWith('temp_') &&
+                      !idStr.includes('://') &&
+                      !isNaN(parseInt(idStr));
+                  })
+                  .map(item => item.id.toString());
 
                 let deleteSuccessful = true;
                 if (mediaLibraryIds.length > 0) {
@@ -630,8 +638,16 @@ export default function HomeScreen({ navigation, route }) {
           onPress: async () => {
              try {
                 const mediaLibraryIds = selectedMedia
-                  .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
-                  .map(item => item.id);
+                   .filter(item => {
+                     const idStr = (item.id || '').toString();
+                     return idStr && 
+                       !idStr.startsWith('vault_') && 
+                       !idStr.startsWith('picked_') && 
+                       !idStr.startsWith('temp_') &&
+                       !idStr.includes('://') &&
+                       !isNaN(parseInt(idStr));
+                   })
+                   .map(item => item.id.toString());
 
                 let deleteSuccessful = true;
                 if (mediaLibraryIds.length > 0) {
