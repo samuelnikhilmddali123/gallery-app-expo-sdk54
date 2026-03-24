@@ -47,7 +47,7 @@ export const moveMediaToVault = async (mediaItem, shouldDelete = true) => {
 
         if (status === 'granted') {
           // Pass the ID in an array. 
-          const success = await MediaLibrary.deleteAssetsAsync([mediaItem.id], true);
+          const success = await MediaLibrary.deleteAssetsAsync([mediaItem.id.toString()]);
           if (!success) {
             console.warn('System delete dialog declined or delete failed');
           }
@@ -109,7 +109,7 @@ export const moveToSystemTrash = async (asset) => {
       return false;
     }
 
-    await MediaLibrary.deleteAssetsAsync([asset.id], true);
+    await MediaLibrary.deleteAssetsAsync([asset.id.toString()]);
     return true;
   } catch (e) {
     console.log('Trash failed:', e);

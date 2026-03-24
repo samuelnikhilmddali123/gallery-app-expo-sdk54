@@ -700,13 +700,19 @@ export default function HomeScreen({ navigation, route }) {
       }
 
       // 2. Delete from System (Batch)
-      const validAssetsToDelete = selectedMedia.filter(
-        m => m.id && !m.id.toString().startsWith('vault_') && !m.id.toString().startsWith('picked_')
-      );
+      const validAssetsToDelete = selectedMedia.filter(m => {
+        const idStr = (m.id || '').toString();
+        return idStr && 
+          !idStr.startsWith('vault_') && 
+          !idStr.startsWith('picked_') &&
+          !idStr.startsWith('temp_') &&
+          !idStr.includes('://') &&
+          !isNaN(parseInt(idStr));
+      });
 
       let deleteSuccess = false;
       if (validAssetsToDelete.length > 0) {
-        const ids = validAssetsToDelete.map(m => m.id);
+        const ids = validAssetsToDelete.map(m => m.id.toString());
         try {
           deleteSuccess = await MediaLibrary.deleteAssetsAsync(ids);
         } catch (e) {
