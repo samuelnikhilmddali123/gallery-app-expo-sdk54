@@ -121,7 +121,7 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
 };
 
 // --- ProgressBar Component ---
-const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggle, scrubX, isScrubbing }) => {
+const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggle, scrubX, isScrubbing, setIsSeeking }) => {
   const [layout, setLayout] = useState({ width: 0, x: 0 });
   const containerRef = useRef(null);
   const lastSeekCallRef = useRef(0);
@@ -148,6 +148,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
       isScrubbing.value = true;
       runOnJS(onIsInteracting)?.(true);
       runOnJS(onScrubToggle)?.(true);
+      if (setIsSeeking) runOnJS(setIsSeeking)(true);
 
       // Update scrubX on native thread (smooth animation)
       const relativeX = e.absoluteX - layout.x;
@@ -168,6 +169,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
     .onEnd((e) => {
       isScrubbing.value = false;
       runOnJS(onIsInteracting)?.(false);
+      if (setIsSeeking) runOnJS(setIsSeeking)(false);
 
       // Final position update (no throttle for accuracy)
       const relativeX = e.absoluteX - layout.x;
@@ -180,6 +182,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
       isScrubbing.value = false;
       runOnJS(onIsInteracting)?.(false);
       runOnJS(onScrubToggle)?.(false);
+      if (setIsSeeking) runOnJS(setIsSeeking)(false);
     });
 
   const tapGesture = Gesture.Tap()
@@ -188,8 +191,16 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
       const relativeX = e.absoluteX - layout.x;
       scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
 
+      if (setIsSeeking) runOnJS(setIsSeeking)(true);
+
       // Tap is instant, no throttle
       runOnJS(handleTouch)(e.absoluteX, false);
+      
+      // Since Tap has no "end" gesture handler that always fires, 
+      // we hide preview after a small delay
+      setTimeout(() => {
+        if (setIsSeeking) runOnJS(setIsSeeking)(false);
+      }, 1000);
     });
 
   const composed = Gesture.Simultaneous(gesture, tapGesture);
@@ -266,6 +277,7 @@ const CustomVideoControls = ({
   // Scrubbing Shared Values
   const scrubX = useSharedValue(0);
   const isScrubbing = useSharedValue(false);
+  const [isSeeking, setIsSeeking] = useState(false);
   const [progressBarWidth, setProgressBarWidth] = useState(0);
 
   const [currentPlaybackRate, setCurrentPlaybackRate] = useState(1.0);
@@ -492,14 +504,16 @@ const CustomVideoControls = ({
           style={{ flex: 1 }}
           onLayout={(e) => setProgressBarWidth(e.nativeEvent.layout.width - 24)} // Subtract margins
         >
-          <ScrubbingPreview
-            videoUri={videoUri}
-            duration={duration || 0}
-            scrubX={scrubX}
-            isScrubbing={isScrubbing}
-            containerWidth={progressBarWidth}
-            colors={colors}
-          />
+          {isSeeking && (
+            <ScrubbingPreview
+              videoUri={videoUri}
+              duration={duration || 0}
+              scrubX={scrubX}
+              isScrubbing={isScrubbing}
+              containerWidth={progressBarWidth}
+              colors={colors}
+            />
+          )}
           <ProgressBar
             progress={progress}
             onSeek={onSeek}
@@ -508,6 +522,7 @@ const CustomVideoControls = ({
             onScrubToggle={onScrubToggle}
             scrubX={scrubX}
             isScrubbing={isScrubbing}
+            setIsSeeking={setIsSeeking}
           />
         </View>
 
