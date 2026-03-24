@@ -207,7 +207,7 @@ export default function VaultScreen({ navigation, onLock }) {
 
         <TouchableOpacity
           style={[styles.addButton, { backgroundColor: '#007AFF' }]}
-          onPress={() => navigation.navigate('MainTabs', { screen: 'Photos', params: { selectionPurpose: 'vaultAdd' } })}
+          onPress={() => navigation.navigate('MainTabs', { screen: 'Home', params: { selectionPurpose: 'vaultAdd' } })}
           activeOpacity={0.8}
         >
           <Ionicons name="add" size={28} color="#fff" />

@@ -950,8 +950,8 @@ export default function HomeScreen({ navigation, route }) {
         return;
       }
 
-      // 2. Unlock Trigger (if setup and locked)
-      if (isVaultSetup && !isVaultUnlocked) {
+      // 2. Unlock Trigger (if setup)
+      if (isVaultSetup) {
         try {
           const isValid = await verifyPassword(trimmedQuery);
           if (isValid) {
