@@ -815,6 +815,10 @@ export default function HomeScreen({ navigation, route }) {
       setLastDeletionType('vault');
       setDeletingItems(new Set(selectedIds));
 
+      // 💨 Switch back to Search Bar immediately so photos have a target (magnifying glass)
+      setIsSelectionMode(false);
+      setSelectedItems(new Set());
+
       // Wait for smoke animation to complete (matched to 1500ms in MediaItem)
       await new Promise(r => setTimeout(r, 1500));
 
