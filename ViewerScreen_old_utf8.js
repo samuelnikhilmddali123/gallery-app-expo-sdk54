@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, StatusBar, Dimensions, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform, FlatList } from 'react-native';
+﻿import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { Video as ExpoAVVideo, Audio } from 'expo-av';
 import { VideoView, useVideoPlayer } from 'expo-video';
@@ -60,21 +60,13 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
   const previewPlayer = useVideoPlayer(videoUri || '', (player) => {
     player.muted = true;
   });
-  const lastPreviewUpdateRef = useRef(0);
-  const previewThrottleMs = 100; // Update preview every 100ms
 
   useAnimatedReaction(
     () => ({ x: scrubX.value, active: isScrubbing.value }),
     (data) => {
       if (data.active && containerWidth > 0) {
         const time = (data.x / containerWidth) * duration;
-
-        // PERFORMANCE: Throttle preview time updates
-        const now = Date.now();
-        if (now - lastPreviewUpdateRef.current >= previewThrottleMs) {
-          lastPreviewUpdateRef.current = now;
-          runOnJS(setPreviewTime)(time);
-        }
+        runOnJS(setPreviewTime)(time);
       }
     }
   );
@@ -124,21 +116,13 @@ const ScrubbingPreview = ({ videoUri, duration, scrubX, isScrubbing, containerWi
 const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggle, scrubX, isScrubbing }) => {
   const [layout, setLayout] = useState({ width: 0, x: 0 });
   const containerRef = useRef(null);
-  const lastSeekCallRef = useRef(0);
-  const throttleMs = 100; // Throttle onSeek calls to 100ms (10 times/sec)
 
-  const handleTouch = (absoluteX, isThrottled = true) => {
+  const handleTouch = (absoluteX) => {
     if (layout.width > 0 && duration > 0) {
       const relativeX = absoluteX - layout.x;
       const percent = Math.max(0, Math.min(1, relativeX / layout.width));
-      const timeInSeconds = percent * duration;
-
-      // PERFORMANCE: Throttle onSeek calls during scrubbing
-      const now = Date.now();
-      if (!isThrottled || now - lastSeekCallRef.current >= throttleMs) {
-        lastSeekCallRef.current = now;
-        onSeek(timeInSeconds, true); // true indicates active scrubbing
-      }
+      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
+      onSeek(percent * duration, true); // true indicates active scrubbing
     }
   };
 
@@ -148,32 +132,14 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
       isScrubbing.value = true;
       runOnJS(onIsInteracting)?.(true);
       runOnJS(onScrubToggle)?.(true);
-
-      // Update scrubX on native thread (smooth animation)
-      const relativeX = e.absoluteX - layout.x;
-      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
-
-      // Call handleTouch without throttle on start for instant feedback
-      runOnJS(handleTouch)(e.absoluteX, false);
+      runOnJS(handleTouch)(e.absoluteX);
     })
     .onUpdate((e) => {
-      // PERFORMANCE: Update scrubX directly on native thread (no runOnJS)
-      // This keeps the thumb animation smooth at 60 FPS
-      const relativeX = e.absoluteX - layout.x;
-      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
-
-      // Throttled seek call to JS thread
-      runOnJS(handleTouch)(e.absoluteX, true);
+      runOnJS(handleTouch)(e.absoluteX);
     })
-    .onEnd((e) => {
+    .onEnd(() => {
       isScrubbing.value = false;
       runOnJS(onIsInteracting)?.(false);
-
-      // Final position update (no throttle for accuracy)
-      const relativeX = e.absoluteX - layout.x;
-      const percent = Math.max(0, Math.min(1, relativeX / layout.width));
-      runOnJS(onSeek)(percent * duration, false); // false = not scrubbing, execute immediately
-
       runOnJS(onScrubToggle)?.(false);
     })
     .onFinalize(() => {
@@ -184,12 +150,7 @@ const ProgressBar = ({ progress, onSeek, duration, onIsInteracting, onScrubToggl
 
   const tapGesture = Gesture.Tap()
     .onStart((e) => {
-      // Update scrubX immediately for visual feedback
-      const relativeX = e.absoluteX - layout.x;
-      scrubX.value = Math.max(0, Math.min(layout.width, relativeX));
-
-      // Tap is instant, no throttle
-      runOnJS(handleTouch)(e.absoluteX, false);
+      runOnJS(handleTouch)(e.absoluteX);
     });
 
   const composed = Gesture.Simultaneous(gesture, tapGesture);
@@ -526,44 +487,224 @@ const CustomVideoControls = ({
 };
 
 // --- Video Content Component ---
-const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions, controlsVisible, controlsOpacity, isZoomed }) => {
+const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
   const { colors } = useTheme();
   const [videoUri, setVideoUri] = useState(null);
   const [isReady, setIsReady] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const { showAlert } = useDialog();
-
   const [isPlaying, setIsPlaying] = useState(videoStates?.current?.[mediaItem.id]?.isPlaying || false);
   const [hasInteracted, setHasInteracted] = useState(!!videoStates?.current?.[mediaItem.id] || false);
   const [isInteracting, setIsInteracting] = useState(false);
-  const [shouldShowVideo, setShouldShowVideo] = useState(!!videoStates?.current?.[mediaItem.id] || false);
+  const [shouldShowVideo, setShouldShowVideo] = useState(!!videoStates?.current?.[mediaItem.id] || false); // Initialize true if cached
+  const { showAlert } = useDialog();
 
-  const [currentTime, setCurrentTime] = useState(videoStates?.current?.[mediaItem.id]?.currentTime || 0);
+  // Initialize from cache if available (for rotation persistence)
+  const cachedState = videoStates?.current?.[mediaItem.id];
+
+  // Custom Control State
+  const [currentTime, setCurrentTime] = useState(cachedState?.currentTime || 0);
   const [duration, setDuration] = useState(0);
   const hasRestoredRef = useRef(false);
   const wasPlayingBeforeScrubRef = useRef(false);
+  const [videoDims, setVideoDims] = useState({
+    width: mediaItem.width || 0,
+    height: mediaItem.height || 0
+  });
 
-  // 1. Resolve URI
+  // Resolve Video URI
   useEffect(() => {
     let isMounted = true;
     const loadUri = async () => {
       try {
+        if (mediaItem.uri && !mediaItem.id.toString().startsWith('ph_')) {
+          setVideoUri(mediaItem.uri);
+          setIsReady(true);
+        } else {
+          // Resolve for cloud/library assets
+          const assetInfo = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
+          if (isMounted) {
+            if (assetInfo.localUri || assetInfo.uri) {
+              setVideoUri(assetInfo.localUri || assetInfo.uri);
+              setIsReady(true);
+            } else {
+              setLoadError(true);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Error determining video URI", e);
+        if (isMounted) setLoadError(true);
+      }
+    };
+    loadUri();
+    return () => { isMounted = false; };
+  }, [mediaItem.id]);
+
+  const player = useVideoPlayer(videoUri || '', (player) => {
+    player.loop = true;
+  });
+
+  // Track settings (Audio & Captions) from player object
+  const availableAudioTracks = player?.availableAudioTracks || [];
+  const currentAudioTrack = player?.selectedAudioTrack || null;
+  const availableTextTracks = player?.availableSubtitleTracks || [];
+  const currentTextTrack = player?.selectedSubtitleTrack || null;
+
+  // Sync player state to our local state
+  useEffect(() => {
+    if (!player) return;
+
+    if (isActive) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }, [player, isActive]);
+
+  useEffect(() => {
+    if (!player) return;
+
+    const timeUpdateSub = player.addListener('timeUpdate', (event) => {
+      const pos = event.currentTime;
+      setCurrentTime(pos);
+      if (videoStates?.current?.[mediaItem.id]) {
+        videoStates.current[mediaItem.id].currentTime = pos;
+      }
+    });
+
+    const playingSub = player.addListener('playingChange', (isPlayingNow) => {
+      setIsPlaying(isPlayingNow);
+      if (videoStates?.current?.[mediaItem.id]) {
+        videoStates.current[mediaItem.id].isPlaying = isPlayingNow;
+      }
+    });
+
+    // Handle initial seek if cached
+    const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
+    if (cachedTime > 0.1 && player.duration > 0 && !hasRestoredRef.current) {
+      player.seekBy(cachedTime - player.currentTime);
+      hasRestoredRef.current = true;
+    }
+
+    // Duration is usually available on load
+    if (player.duration > 0) {
+      setDuration(player.duration);
+    }
+
+    return () => {
+      timeUpdateSub.remove();
+      playingSub.remove();
+    };
+  }, [player, videoUri]);
+
+  const handleAudioSelect = (track) => {
+    if (player) {
+      player.setAudioTrack(track);
+    }
+  };
+
+  const handleTextSelect = (track) => {
+    if (player) {
+      player.setSubtitleTrack(track);
+    }
+  };
+
+  // Use refs for flags that shouldn't trigger re-renders or reset inconsistently
+  const loadedIdRef = useRef(null);
+
+  // Clean up on unmount or ID change
+  useEffect(() => {
+    return () => {
+      setIsReady(false);
+      setLoadError(false);
+      setVideoUri(null);
+      setHasInteracted(false); // Reset interaction state for new video
+      loadedIdRef.current = null;
+    };
+  }, [mediaItem.id]); // Reset when ID changes
+
+  // Cleanup video on screen exit and handle AppState
+  useFocusEffect(
+    useCallback(() => {
+      const handleAppStateChange = (nextAppState) => {
+        if (nextAppState.match(/inactive|background/)) {
+          if (player) {
+            player.pause();
+          }
+        }
+      };
+
+      const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+      return () => {
+        subscription.remove();
+      };
+    }, [player])
+  );
+
+  // Resolve Video URI
+  useEffect(() => {
+    // If we already have the URI cached for this ID, just use it
+    if (loadedIdRef.current === mediaItem.id) return;
+
+    // Reset state for new item
+    setIsReady(false);
+    setLoadError(false);
+    setVideoUri(null);
+    setCurrentTime(0);
+    setDuration(0);
+    hasRestoredRef.current = false;
+
+    const cachedUri = videoStates?.current?.[mediaItem.id]?.uri;
+    if (cachedUri) {
+      setVideoUri(cachedUri);
+      loadedIdRef.current = mediaItem.id;
+      setIsReady(true);
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadUri = async () => {
+      try {
         let uri = null;
+        // 1. Direct path check for camera videos and vault items
         const isVault = mediaItem.id && mediaItem.id.toString().startsWith('vault_');
         const isTrash = mediaItem.isTrash || mediaItem.isAppTrash;
-        let initialUri = (isVault || isTrash)
-          ? (mediaItem.filePath || mediaItem.uri || mediaItem.localUri)
-          : (mediaItem.uri || mediaItem.localUri || mediaItem.filePath);
+        let initialUri;
 
         if (isVault || isTrash) {
+          // For vault/trash (appΓÇæmanaged files), direct file paths are expected.
+          initialUri = mediaItem.filePath || mediaItem.localUri || mediaItem.uri;
+        } else if (Platform.OS === 'android') {
+          // On Android we strongly prefer content:// URIs from MediaStore to avoid
+          // scopedΓÇæstorage violations and brittle fileΓÇæpath access.
+          initialUri = mediaItem.uri || mediaItem.localUri || mediaItem.filePath;
+        } else {
+          // iOS and others: preserve previous priority.
+          initialUri = mediaItem.filePath || mediaItem.localUri || mediaItem.uri;
+        }
+
+        if (initialUri && (isVault || isTrash)) {
+          // For appΓÇæprivate vault/trash items, keep using the direct file path.
           uri = initialUri;
-        } else if (mediaItem.id && !mediaItem.id.toString().startsWith('picked_') && !mediaItem.id.toString().startsWith('temp_')) {
+        }
+        // 2. Try MediaLibrary for regular gallery assets ΓÇô this gives us stable content:// URIs on Android.
+        else if (mediaItem.id && !mediaItem.id.toString().startsWith('picked_') && !mediaItem.id.toString().startsWith('temp_')) {
           const { status } = await MediaLibrary.requestPermissionsAsync();
           if (status === 'granted') {
             try {
               const asset = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
               if (asset) {
-                uri = (Platform.OS === 'android') ? (asset.uri || asset.localUri) : (asset.localUri || asset.uri);
+                if (Platform.OS === 'android') {
+                  // Prefer the scopedΓÇæstorage content:// URI on Android.
+                  uri = asset.uri || asset.localUri || initialUri;
+                } else {
+                  uri = asset.localUri || asset.uri || initialUri;
+                }
+                if (asset.width && asset.height) {
+                  setVideoDims({ width: asset.width, height: asset.height });
+                }
               } else {
                 uri = initialUri;
               }
@@ -573,175 +714,79 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           } else {
             uri = initialUri;
           }
-        } else {
+        }
+        // 3. Fallback
+        else {
           uri = initialUri;
         }
 
         if (isMounted) {
           if (uri) {
             setVideoUri(uri);
-            setIsReady(true);
+            loadedIdRef.current = mediaItem.id;
+            // Cache the URI for faster remounts (rotation)
+            if (videoStates?.current) {
+              videoStates.current[mediaItem.id] = {
+                ...videoStates.current[mediaItem.id],
+                uri: uri
+              };
+            }
+            setIsReady(true); // Only set ready when we strictly have a URI
           } else {
+            console.error("VideoContent: Could not resolve URI for", mediaItem.id);
             setLoadError(true);
           }
         }
       } catch (e) {
-        console.error("VideoContent: Error resolving URI", e);
+        console.error("Error determining video URI", e);
         if (isMounted) setLoadError(true);
       }
     };
     loadUri();
     return () => { isMounted = false; };
-  }, [mediaItem.id]);
+  }, [mediaItem.id, videoStates]);
 
-  const player = useVideoPlayer(videoUri, (p) => {
-    p.loop = true;
-  });
 
-  // Handle source updates reactively
+  // Handle Playback Status Updates (Redundant with expo-video event listeners, removed)
+
+  // Handle foreground/background via AppState handled in focus effect
+
+  // Auto-mount and auto-play when active
   useEffect(() => {
-    if (player && videoUri) {
-      console.log(`VideoContent: Updating player source to ${videoUri}`);
-      player.replace(videoUri);
-      
-      // Auto-play if component is already active
-      if (isActive) {
-        console.log('VideoContent: Auto-playing after source update');
-        player.play();
-        setShouldShowVideo(true);
-        setHasInteracted(true);
-      }
-    }
-  }, [player, videoUri, isActive]);
-
-  const availableAudioTracks = player?.availableAudioTracks || [];
-  const currentAudioTrack = player?.selectedAudioTrack || null;
-  const availableTextTracks = player?.availableSubtitleTracks || [];
-  const currentTextTrack = player?.selectedSubtitleTrack || null;
-
-  // 2. Lifecycle Sync
-  useEffect(() => {
-    if (!player) return;
-    if (isActive) {
-      player.play();
+    if (isActive && isReady && videoUri) {
+      console.log('VideoContent: Auto-mounting and playing active video');
       setShouldShowVideo(true);
       setHasInteracted(true);
-    } else {
-      player.pause();
     }
-  }, [player, isActive]);
+  }, [isActive, isReady, videoUri]);
 
-  // 3. Listeners & Time Tracking
-  useEffect(() => {
-    if (!player) return;
-
-    let interval;
-
-    // Time Tracking Listener - Primary source
-    const timeUpdateSub = player.addListener('timeUpdate', ({ currentTime: pos }) => {
-      // expo-video provides seconds (float)
-      setCurrentTime(pos);
-      if (videoStates?.current?.[mediaItem.id]) {
-        videoStates.current[mediaItem.id].currentTime = pos;
-      }
-    });
-
-    // Playback State Tracking
-    const playingSub = player.addListener('playingChange', ({ isPlaying: isPlayingNow }) => {
-      console.log(`VideoContent: playingChange: ${isPlayingNow}`);
-      setIsPlaying(isPlayingNow);
-      
-      if (videoStates?.current?.[mediaItem.id]) {
-        videoStates.current[mediaItem.id].isPlaying = isPlayingNow;
-      }
-
-      // Start/Stop fallback polling for smoother UI timer
-      if (isPlayingNow) {
-        if (interval) clearInterval(interval);
-        interval = setInterval(() => {
-          if (player && player.playing) {
-            setCurrentTime(player.currentTime);
-          }
-        }, 500); // Update every 500ms
-      } else {
-        if (interval) clearInterval(interval);
-      }
-    });
-
-    // Status Tracking (Duration & Restoration)
-    const statusSub = player.addListener('statusChange', ({ status: newStatus }) => {
-      console.log(`VideoContent: statusChange: ${newStatus}`);
-      if (newStatus === 'readyToPlay') {
-        if (player.duration > 0) {
-          setDuration(player.duration);
-        }
-        
-        // Safe Restoration Logic
-        const cachedTime = videoStates?.current?.[mediaItem.id]?.currentTime;
-        if (cachedTime > 0.1 && !hasRestoredRef.current) {
-          console.log(`VideoContent: Restoring playback to ${cachedTime}`);
-          // Use a small delay to ensure player is truly ready for seeking
-          setTimeout(() => {
-            if (player) {
-              player.seekBy(cachedTime - player.currentTime);
-              hasRestoredRef.current = true;
-            }
-          }, 100);
-        }
-      }
-    });
-
-    // Initial Sync
-    if (player.duration > 0) {
-      setDuration(player.duration);
-    }
-    
-    // Set initial playing state
-    setIsPlaying(player.playing);
-    if (player.playing) {
-      interval = setInterval(() => {
-        if (player) setCurrentTime(player.currentTime);
-      }, 500);
-    }
-
-    return () => {
-      timeUpdateSub.remove();
-      playingSub.remove();
-      statusSub.remove();
-      if (interval) clearInterval(interval);
-    };
-  }, [player, videoUri, mediaItem.id]);
-
-  useFocusEffect(
-    useCallback(() => {
-      const handleAppStateChange = (nextAppState) => {
-        if (nextAppState.match(/inactive|background/) && player) {
-          player.pause();
-        }
-      };
-      const subscription = AppState.addEventListener('change', handleAppStateChange);
-      return () => subscription.remove();
-    }, [player])
-  );
-
-  // 4. Handlers
   const togglePlay = () => {
     if (!player) return;
-    const currentlyPlaying = player.playing;
-    console.log(`VideoContent: togglePlay (current: ${currentlyPlaying})`);
-    if (currentlyPlaying) {
+
+    if (isPlaying) {
       player.pause();
     } else {
       player.play();
     }
-    if (!hasInteracted) setHasInteracted(true);
+
+    if (!hasInteracted) {
+      setHasInteracted(true);
+    }
   };
 
-  const handleAudioSelect = (track) => player?.setAudioTrack(track);
-  const handleTextSelect = (track) => player?.setSubtitleTrack(track);
-  const handleRewind10 = () => player?.seekBy(-10);
-  const handleForward10 = () => player?.seekBy(10);
-  const handleSeek = (timeInSeconds) => {
+  const handleRewind10 = () => {
+    if (player) {
+      player.seekBy(-10);
+    }
+  };
+
+  const handleForward10 = () => {
+    if (player && duration) {
+      player.seekBy(10);
+    }
+  };
+
+  const handleSeek = (timeInSeconds, isScrubbing = false) => {
     if (player) {
       player.seekBy(timeInSeconds - player.currentTime);
       setCurrentTime(timeInSeconds);
@@ -750,39 +795,50 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
 
   const handleScrubToggle = (isScrubbing) => {
     if (!player) return;
+
     if (isScrubbing) {
       wasPlayingBeforeScrubRef.current = isPlaying;
       player.pause();
-    } else if (wasPlayingBeforeScrubRef.current) {
-      player.play();
+    } else {
+      if (wasPlayingBeforeScrubRef.current) {
+        player.play();
+      }
     }
   };
 
   const toggleFullscreen = async () => {
     try {
       const orientation = await ScreenOrientation.getOrientationAsync();
+      console.log('Current Orientation:', orientation);
       if (orientation === ScreenOrientation.Orientation.PORTRAIT_UP || orientation === ScreenOrientation.Orientation.PORTRAIT_DOWN) {
+        console.log('Locking to LANDSCAPE');
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
       } else {
+        console.log('Locking to PORTRAIT_UP');
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       }
     } catch (e) {
+      console.error('Error toggling fullscreen:', e);
       showAlert('Error', 'Failed to toggle fullscreen');
     }
   };
 
-  const videoBoxStyle = useMemo(() => ({
-    width: dimensions.width,
-    height: dimensions.height,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000'
-  }), [dimensions.width, dimensions.height]);
+  const videoBoxStyle = useMemo(() => {
+    return {
+      width: dimensions.width,
+      height: dimensions.height,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#000'
+    };
+  }, [dimensions]);
 
   const videoControlsStyle = useAnimatedStyle(() => ({
     opacity: controlsOpacity.value,
   }));
 
+  // Render Logic
+  // 1. Error state
   if (loadError) {
     return (
       <View style={{ width: dimensions.width, height: dimensions.height, justifyContent: 'center', alignItems: 'center' }}>
@@ -792,8 +848,11 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     );
   }
 
+  // 2. Loading state (strictly gated)
   if (!isReady || !videoUri) {
-    return <View style={{ width: dimensions.width, height: dimensions.height, backgroundColor: '#000' }} />;
+    return (
+      <View style={{ width: dimensions.width, height: dimensions.height, backgroundColor: '#000' }} />
+    );
   }
 
   return (
@@ -817,7 +876,6 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           onToggleUI={onToggleUI}
           refreshKey={mediaItem.id}
           dimensions={dimensions}
-          isZoomed={isZoomed}
         />
       )}
 
@@ -1003,7 +1061,7 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
 
 
 // --- Media Item Wrapper ---
-const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange, onToggleUI, refreshKey, videoStates, dimensions, controlsVisible, controlsOpacity, isZoomed }) => {
+const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange, onToggleUI, refreshKey, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
   const isVideo = isVideoItem(mediaItem);
 
   if (isVideo) {
@@ -1020,7 +1078,6 @@ const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange
           onToggleUI={onToggleUI}
           refreshKey={refreshKey}
           dimensions={dimensions}
-          isZoomed={false}
         />
       );
     }
@@ -1034,7 +1091,6 @@ const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange
         dimensions={dimensions}
         controlsVisible={controlsVisible}
         controlsOpacity={controlsOpacity}
-        isZoomed={isZoomed}
       />
     );
   }
@@ -1070,14 +1126,6 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const [mediaItems, setMediaItems] = useState(allItems && allItems.length > 0 ? allItems : (item ? [item] : []));
   const [currentIndex, setCurrentIndex] = useState(initialIndex || 0);
   const [isZoomed, setIsZoomed] = useState(false);
-  
-  // Debug Log output exactly matching requested schema
-  const currentItemSnapshot = mediaItems[currentIndex];
-  useEffect(() => {
-    if (currentItemSnapshot) {
-      console.log("Opened:", currentItemSnapshot.id, currentItemSnapshot.uri);
-    }
-  }, [currentIndex, currentItemSnapshot]);
   const flatListRef = useRef(null);
   // Persist video playback state across rotation/re-renders
   const videoStates = useRef({});
@@ -1187,8 +1235,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
     return () => StatusBar.setHidden(false, 'fade');
   }, []);
 
+  // Scroll to initial
   useEffect(() => {
-    if (initialIndex !== undefined && flatListRef.current && mediaItems.length > initialIndex) {
+    if (initialIndex !== undefined && flatListRef.current && mediaItems.length > 0) {
       setTimeout(() => {
         flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false });
       }, 100);
@@ -1199,19 +1248,6 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   // This effect is removed to prevent redundant scroll corrections
 
   const currentItem = mediaItems[currentIndex];
-
-  // Preload adjacent images to keep paging smooth.
-  useEffect(() => {
-    const nearbyUris = [currentIndex - 1, currentIndex + 1]
-      .map((index) => mediaItems[index])
-      .filter((item) => item && !isVideoItem(item))
-      .map((item) => item.uri || item.localUri || item.filePath)
-      .filter(Boolean);
-
-    if (nearbyUris.length > 0) {
-      Image.prefetch(nearbyUris).catch(() => { });
-    }
-  }, [currentIndex, mediaItems]);
 
   // Custom back handler to pass cropped asset to HomeScreen
   const handleBackPress = useCallback(() => {
@@ -1234,7 +1270,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const verticalSwipeGesture = Gesture.Pan()
     .enabled(!isZoomed) // Only enable when not zoomed
     .activeOffsetY([-50, 50]) // Require 50px vertical movement to activate
-    .failOffsetX([-20, 20]) // Quickly fail on horizontal intent so FlatList swipe wins
+    .failOffsetX([-20, 20]) // Fail if horizontal movement exceeds 20px
     .onEnd((event) => {
       'worklet';
       // If vertical velocity is significant, exit
@@ -1336,10 +1372,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
         dimensions={dimensions}
         controlsVisible={controlsVisible}
         controlsOpacity={controlsOpacity}
-        isZoomed={isZoomed}
       />
     );
-  }, [currentIndex, toggleControls, refreshKey, dimensions, controlsVisible, videoStates, controlsOpacity, isZoomed]);
+  }, [currentIndex, toggleControls, refreshKey, dimensions, controlsVisible, videoStates, controlsOpacity]);
 
   const getItemLayout = useCallback((data, index) => ({
     length: dimensions.width,
@@ -1350,26 +1385,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
     // Only update index if NOT rotating to prevent jumping
     if (!isRotatingRef.current && viewableItems.length > 0) {
-      const newIndex = viewableItems[0].index;
-      if (newIndex !== currentIndexRef.current) {
-        setCurrentIndex(newIndex);
-        setIsZoomed(false); // Reset zoom state when moving to a new item
-      }
+      setCurrentIndex(viewableItems[0].index);
     }
   }).current;
-
-  const handleMomentumScrollEnd = useCallback((event) => {
-    if (isRotatingRef.current) return;
-
-    const offsetX = event.nativeEvent?.contentOffset?.x ?? 0;
-    const pageWidth = dimensions.width || 1;
-    const newIndex = Math.max(0, Math.min(mediaItems.length - 1, Math.round(offsetX / pageWidth)));
-
-    if (newIndex !== currentIndexRef.current) {
-      setCurrentIndex(newIndex);
-      setIsZoomed(false);
-    }
-  }, [dimensions.width, mediaItems.length]);
 
   // Use dynamic dimensions for proper orientation handling
   const { width: screenWidth, height: screenHeight } = dimensions;
@@ -1383,6 +1401,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const isPhoto = currentItem && !isVideoItem(currentItem);
 
   return (
+    <GestureDetector gesture={verticalSwipeGesture}>
       <View style={styles.container}>
         <Animated.View style={[StyleSheet.absoluteFill, flatListStyle]}>
           <FlatList
@@ -1392,26 +1411,15 @@ export default function ViewerScreen({ route, navigation: navProp }) {
             keyExtractor={item => item.id?.toString() || Math.random().toString()}
             horizontal
             pagingEnabled
-            directionalLockEnabled
-            bounces={false}
-            overScrollMode="never"
-            scrollEnabled={!isZoomed}
+            scrollEnabled={!isZoomed && (!isLandscape || isPhoto)}
             showsHorizontalScrollIndicator={false}
             onViewableItemsChanged={onViewableItemsChanged}
-            onMomentumScrollEnd={handleMomentumScrollEnd}
             viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
             getItemLayout={getItemLayout}
-            initialScrollIndex={initialIndex && mediaItems.length > initialIndex ? initialIndex : 0}
-            removeClippedSubviews={false}
-            windowSize={10}
-            maxToRenderPerBatch={5}
+            initialScrollIndex={initialIndex || 0}
+            windowSize={3}
+            maxToRenderPerBatch={2}
             initialNumToRender={1}
-            onScrollToIndexFailed={info => {
-              const wait = new Promise(resolve => setTimeout(resolve, 300));
-              wait.then(() => {
-                flatListRef.current?.scrollToIndex({ index: info.index, animated: false });
-              });
-            }}
           />
         </Animated.View>
 
@@ -1441,6 +1449,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
         </Animated.View>
 
       </View>
+    </GestureDetector>
   );
 }
 

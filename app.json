@@ -50,8 +50,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "a206e768-6148-494e-8f92-f6380c01a7f4"
+        "projectId": "bc20fce7-2ea1-41e4-96dc-bdf9aa52246e"
       }
-    }
+    },
+    "owner": "nikhil_2003"
   }
 }

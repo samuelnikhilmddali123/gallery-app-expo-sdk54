@@ -465,17 +465,17 @@ export default function HomeScreen({ navigation, route }) {
         return newSet;
       });
     } else {
-      // Normal behavior - open viewer. Dynamically calculate index to bypass React.memo rendering stales
-      const realIndex = filteredMediaRef.current.findIndex(m => m.id === item.id);
+      // Normal behavior - open viewer with the live media list.
+      const realIndex = activeMediaList.findIndex(m => m.id === item.id);
       console.log("Tapped:", item.id, item.uri);
       navigation.navigate('Viewer', {
         item,
-        allItems: filteredMediaRef.current, // Use ref for stable callback
+        allItems: activeMediaList,
         initialIndex: realIndex >= 0 ? realIndex : index,
         selectedId: item.id
       });
     }
-  }, [navigation]); // Removed filteredMedia dependency
+  }, [navigation, activeMediaList]);
 
   const exitSelectionMode = useCallback(() => {
     setIsSelectionMode(false);

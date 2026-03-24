@@ -18,19 +18,7 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 const DOUBLE_TAP_SCALE = 3;
 
-function ZoomableImage({ 
-  source, 
-  style, 
-  contentFit = 'contain', 
-  onZoomChange, 
-  intrinsicWidth, 
-  intrinsicHeight, 
-  recyclingKey, 
-  isActive = true, 
-  onPress, 
-  containerWidth: propContainerWidth, 
-  containerHeight: propContainerHeight
-}) {
+function ZoomableImage({ source, style, contentFit = 'contain', onZoomChange, intrinsicWidth, intrinsicHeight, recyclingKey, isActive = true, onPress, containerWidth: propContainerWidth, containerHeight: propContainerHeight }) {
   // Shared values
   const scale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -248,12 +236,6 @@ function ZoomableImage({
   const panGesture = Gesture.Pan()
     .manualActivation(true)
     .averageTouches(true)
-    .onTouchesDown((e, state) => {
-      'worklet';
-      if (scale.value <= 1.01) {
-        state.fail();
-      }
-    })
     .onTouchesMove((e, state) => {
       'worklet';
       if (isDoubleTapping.value === 1) {
@@ -262,6 +244,8 @@ function ZoomableImage({
       }
       if (scale.value > 1.01) {
         state.activate();
+      } else {
+        state.fail();
       }
     })
     .onStart(() => {

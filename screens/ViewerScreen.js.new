@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, StatusBar, Dimensions, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform, FlatList } from 'react-native';
+import { View, Text, StyleSheet, StatusBar, Dimensions, FlatList, Alert, AppState, TouchableOpacity as RNTouchableOpacity, TouchableOpacity, PanResponder, Modal, ScrollView, NativeModules, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { Video as ExpoAVVideo, Audio } from 'expo-av';
 import { VideoView, useVideoPlayer } from 'expo-video';
@@ -526,7 +526,7 @@ const CustomVideoControls = ({
 };
 
 // --- Video Content Component ---
-const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions, controlsVisible, controlsOpacity, isZoomed }) => {
+const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
   const { colors } = useTheme();
   const [videoUri, setVideoUri] = useState(null);
   const [isReady, setIsReady] = useState(false);
@@ -817,7 +817,6 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
           onToggleUI={onToggleUI}
           refreshKey={mediaItem.id}
           dimensions={dimensions}
-          isZoomed={isZoomed}
         />
       )}
 
@@ -1003,7 +1002,7 @@ const ImageContent = ({ mediaItem, isActive, onZoomChange, onToggleUI, refreshKe
 
 
 // --- Media Item Wrapper ---
-const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange, onToggleUI, refreshKey, videoStates, dimensions, controlsVisible, controlsOpacity, isZoomed }) => {
+const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange, onToggleUI, refreshKey, videoStates, dimensions, controlsVisible, controlsOpacity }) => {
   const isVideo = isVideoItem(mediaItem);
 
   if (isVideo) {
@@ -1020,7 +1019,6 @@ const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange
           onToggleUI={onToggleUI}
           refreshKey={refreshKey}
           dimensions={dimensions}
-          isZoomed={false}
         />
       );
     }
@@ -1034,7 +1032,6 @@ const MediaItem = React.memo(({ mediaItem, index, isActive, isNear, onZoomChange
         dimensions={dimensions}
         controlsVisible={controlsVisible}
         controlsOpacity={controlsOpacity}
-        isZoomed={isZoomed}
       />
     );
   }
@@ -1063,12 +1060,17 @@ MediaItem.displayName = 'MediaItem';
 // --- Main Screen ---
 export default function ViewerScreen({ route, navigation: navProp }) {
   const routeParams = route?.params || {};
-  const { item, allItems, initialIndex, refreshKey, originalAssetId } = routeParams;
+  const { item, allItems, initialIndex, selectedId, refreshKey, originalAssetId } = routeParams;
   const navHook = useNavigation();
   const navigation = navHook || navProp;
 
   const [mediaItems, setMediaItems] = useState(allItems && allItems.length > 0 ? allItems : (item ? [item] : []));
-  const [currentIndex, setCurrentIndex] = useState(initialIndex || 0);
+  
+  // Find guaranteed safe start index using ID
+  const startIndex = mediaItems.findIndex(m => m.id === selectedId);
+  const resolvedInitialIndex = startIndex >= 0 ? startIndex : (initialIndex || 0);
+  
+  const [currentIndex, setCurrentIndex] = useState(resolvedInitialIndex);
   const [isZoomed, setIsZoomed] = useState(false);
   
   // Debug Log output exactly matching requested schema
@@ -1187,31 +1189,19 @@ export default function ViewerScreen({ route, navigation: navProp }) {
     return () => StatusBar.setHidden(false, 'fade');
   }, []);
 
+  // Scroll to initial
   useEffect(() => {
-    if (initialIndex !== undefined && flatListRef.current && mediaItems.length > initialIndex) {
+    if (resolvedInitialIndex !== undefined && flatListRef.current && mediaItems.length > 0) {
       setTimeout(() => {
-        flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false });
+        flatListRef.current?.scrollToIndex({ index: resolvedInitialIndex, animated: false });
       }, 100);
     }
-  }, [initialIndex, mediaItems.length]);
+  }, [resolvedInitialIndex, mediaItems.length]);
 
   // Scroll position is now handled directly in the dimension change listener
   // This effect is removed to prevent redundant scroll corrections
 
   const currentItem = mediaItems[currentIndex];
-
-  // Preload adjacent images to keep paging smooth.
-  useEffect(() => {
-    const nearbyUris = [currentIndex - 1, currentIndex + 1]
-      .map((index) => mediaItems[index])
-      .filter((item) => item && !isVideoItem(item))
-      .map((item) => item.uri || item.localUri || item.filePath)
-      .filter(Boolean);
-
-    if (nearbyUris.length > 0) {
-      Image.prefetch(nearbyUris).catch(() => { });
-    }
-  }, [currentIndex, mediaItems]);
 
   // Custom back handler to pass cropped asset to HomeScreen
   const handleBackPress = useCallback(() => {
@@ -1234,7 +1224,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const verticalSwipeGesture = Gesture.Pan()
     .enabled(!isZoomed) // Only enable when not zoomed
     .activeOffsetY([-50, 50]) // Require 50px vertical movement to activate
-    .failOffsetX([-20, 20]) // Quickly fail on horizontal intent so FlatList swipe wins
+    .failOffsetX([-20, 20]) // Fail if horizontal movement exceeds 20px
     .onEnd((event) => {
       'worklet';
       // If vertical velocity is significant, exit
@@ -1336,10 +1326,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
         dimensions={dimensions}
         controlsVisible={controlsVisible}
         controlsOpacity={controlsOpacity}
-        isZoomed={isZoomed}
       />
     );
-  }, [currentIndex, toggleControls, refreshKey, dimensions, controlsVisible, videoStates, controlsOpacity, isZoomed]);
+  }, [currentIndex, toggleControls, refreshKey, dimensions, controlsVisible, videoStates, controlsOpacity]);
 
   const getItemLayout = useCallback((data, index) => ({
     length: dimensions.width,
@@ -1350,26 +1339,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
     // Only update index if NOT rotating to prevent jumping
     if (!isRotatingRef.current && viewableItems.length > 0) {
-      const newIndex = viewableItems[0].index;
-      if (newIndex !== currentIndexRef.current) {
-        setCurrentIndex(newIndex);
-        setIsZoomed(false); // Reset zoom state when moving to a new item
-      }
+      setCurrentIndex(viewableItems[0].index);
     }
   }).current;
-
-  const handleMomentumScrollEnd = useCallback((event) => {
-    if (isRotatingRef.current) return;
-
-    const offsetX = event.nativeEvent?.contentOffset?.x ?? 0;
-    const pageWidth = dimensions.width || 1;
-    const newIndex = Math.max(0, Math.min(mediaItems.length - 1, Math.round(offsetX / pageWidth)));
-
-    if (newIndex !== currentIndexRef.current) {
-      setCurrentIndex(newIndex);
-      setIsZoomed(false);
-    }
-  }, [dimensions.width, mediaItems.length]);
 
   // Use dynamic dimensions for proper orientation handling
   const { width: screenWidth, height: screenHeight } = dimensions;
@@ -1383,35 +1355,29 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const isPhoto = currentItem && !isVideoItem(currentItem);
 
   return (
+    <GestureDetector gesture={verticalSwipeGesture}>
       <View style={styles.container}>
         <Animated.View style={[StyleSheet.absoluteFill, flatListStyle]}>
           <FlatList
             ref={flatListRef}
             data={mediaItems}
             renderItem={renderItem}
-            keyExtractor={item => item.id?.toString() || Math.random().toString()}
+            keyExtractor={(item, index) => {
+              if (item?.id) return item.id.toString();
+              if (item?.uri) return item.uri.toString();
+              return `viewer-item-${index}`;
+            }}
             horizontal
             pagingEnabled
-            directionalLockEnabled
-            bounces={false}
-            overScrollMode="never"
-            scrollEnabled={!isZoomed}
+            scrollEnabled={!isZoomed && (!isLandscape || isPhoto)}
             showsHorizontalScrollIndicator={false}
             onViewableItemsChanged={onViewableItemsChanged}
-            onMomentumScrollEnd={handleMomentumScrollEnd}
             viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
             getItemLayout={getItemLayout}
-            initialScrollIndex={initialIndex && mediaItems.length > initialIndex ? initialIndex : 0}
-            removeClippedSubviews={false}
-            windowSize={10}
-            maxToRenderPerBatch={5}
+            initialScrollIndex={resolvedInitialIndex}
+            windowSize={3}
+            maxToRenderPerBatch={2}
             initialNumToRender={1}
-            onScrollToIndexFailed={info => {
-              const wait = new Promise(resolve => setTimeout(resolve, 300));
-              wait.then(() => {
-                flatListRef.current?.scrollToIndex({ index: info.index, animated: false });
-              });
-            }}
           />
         </Animated.View>
 
@@ -1441,6 +1407,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
         </Animated.View>
 
       </View>
+    </GestureDetector>
   );
 }
 
