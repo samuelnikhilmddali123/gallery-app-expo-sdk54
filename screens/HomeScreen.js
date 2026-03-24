@@ -98,7 +98,7 @@ const MediaItem = React.memo(({ item, index, isSelected, isDeleting, deletionTyp
       } else if (deletionType === 'vault') {
         // 💨 SMOKE ANIMATION (Speed to Top)
         deleteProgress.value = withTiming(3, { 
-          duration: 800, 
+          duration: 1500, // Slower, more "smoke" like
           easing: Easing.bezier(0.4, 0, 0.2, 1) 
         });
       } else {
@@ -232,7 +232,7 @@ export default function HomeScreen({ navigation, route }) {
       rainbowProgress.value = 0; // Reset before starting loop
       rainbowProgress.value = withRepeat(
         withTiming(1, {
-          duration: 3500, // Smooth transition
+          duration: 5000, // Even smoother (0.7s per color)
           easing: Easing.linear,
         }),
         -1, // infinite
@@ -815,8 +815,8 @@ export default function HomeScreen({ navigation, route }) {
       setLastDeletionType('vault');
       setDeletingItems(new Set(selectedIds));
 
-      // Wait for smoke animation to complete
-      await new Promise(r => setTimeout(r, 800));
+      // Wait for smoke animation to complete (matched to 1500ms in MediaItem)
+      await new Promise(r => setTimeout(r, 1500));
 
       // 4. Success - Clean up and Return
       setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
