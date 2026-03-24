@@ -40,6 +40,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import DropdownMenu from '../components/DropdownMenu';
 import SideSettingsPanel from '../components/SideSettingsPanel';
 import { useDialog } from '../contexts/DialogContext';
+const AnimatedIonicons = Animated.createAnimatedComponent(Ionicons);
 
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
@@ -94,6 +95,12 @@ const MediaItem = React.memo(({ item, index, isSelected, isDeleting, deletionTyp
       if (deletionType === 'trash') {
         // Fast fade-out for trash
         deleteProgress.value = withTiming(1, { duration: 300 });
+      } else if (deletionType === 'vault') {
+        // 💨 SMOKE ANIMATION (Speed to Top)
+        deleteProgress.value = withTiming(3, { 
+          duration: 800, 
+          easing: Easing.bezier(0.4, 0, 0.2, 1) 
+        });
       } else {
         // Epic spin-shrink for permanent delete
         deleteProgress.value = withTiming(2, { duration: 600, easing: Easing.bezier(0.2, 0.64, 0.21, 1) });
@@ -114,14 +121,33 @@ const MediaItem = React.memo(({ item, index, isSelected, isDeleting, deletionTyp
       return { opacity: 1 - deleteProgress.value, transform: [{ scale: scaleBase }] };
     }
     
-    // Permanent Delete state (Fly out physics)
-    const p = deleteProgress.value - 1; 
+    if (deleteProgress.value <= 2) {
+      // Permanent Delete state (Fly out physics)
+      const p = deleteProgress.value - 1; 
+      return {
+        opacity: 1 - (p * 0.8),
+        transform: [
+          { translateY: p * 60 },
+          { scale: scaleBase * (1 - p) },
+          { rotate: `${p * 180}deg` }
+        ]
+      };
+    }
+
+    // 💨 Vault Smoke state (Fly to search bar)
+    const p = deleteProgress.value - 2;
+    const col = index % NUM_COLUMNS;
+    const itemCenterX = (col * ITEM_SIZE) + (ITEM_SIZE / 2);
+    const targetX = width / 2 - itemCenterX;
+
     return {
-      opacity: 1 - (p * 0.8),
+      opacity: Math.max(0, 1 - p * 1.2),
+      zIndex: 1000,
       transform: [
-        { translateY: p * 60 },
-        { scale: scaleBase * (1 - p) },
-        { rotate: `${p * 180}deg` }
+        { translateY: -p * (index/3 * ITEM_SIZE + 200) }, // Fly up past header
+        { translateX: targetX * p }, // Move to center X
+        { scale: Math.max(0, scaleBase * (1 - p)) },
+        { rotate: `${p * 15}deg` }
       ]
     };
   });
@@ -192,6 +218,42 @@ export default function HomeScreen({ navigation, route }) {
   const [isFirstLaunch, setIsFirstLaunch] = useState(false);
   const [deletingItems, setDeletingItems] = useState(new Set());
   const [lastDeletionType, setLastDeletionType] = useState('trash'); // 'trash' | 'vault' | 'delete'
+  
+  useEffect(() => {
+    filteredMediaRef.current = activeMediaList;
+  }, [activeMediaList]);
+
+  // 🌈 RAINBOW ANIMATION FOR SEARCH ICON (Vault Status Indicator)
+  const RAINBOW_COLORS = ['#FF3B30', '#FF9500', '#FFCC00', '#4CD964', '#5AC8FA', '#007AFF', '#5856D6', '#FF3B30']; // End with start for loop
+  const rainbowProgress = useSharedValue(0);
+
+  useEffect(() => {
+    if (isVaultSetup) {
+      rainbowProgress.value = 0; // Reset before starting loop
+      rainbowProgress.value = withRepeat(
+        withTiming(1, {
+          duration: 3500, // Smooth transition
+          easing: Easing.linear,
+        }),
+        -1, // infinite
+        false // no reverse
+      );
+    } else {
+      cancelAnimation(rainbowProgress);
+      rainbowProgress.value = 0;
+    }
+  }, [isVaultSetup]);
+
+  const animatedSearchIconStyle = useAnimatedStyle(() => {
+    if (!isVaultSetup) return { color: colors.searchPlaceholder };
+    return {
+      color: interpolateColor(
+        rainbowProgress.value,
+        [0, 0.14, 0.28, 0.42, 0.56, 0.7, 0.84, 1],
+        RAINBOW_COLORS
+      )
+    };
+  });
 
   // Pagination & Loading
   const [pageInfo, setPageInfo] = useState({ hasNextPage: true, endCursor: undefined });
@@ -749,9 +811,17 @@ export default function HomeScreen({ navigation, route }) {
         return;
       }
 
+      // 3. Trigger Smoke Animation
+      setLastDeletionType('vault');
+      setDeletingItems(new Set(selectedIds));
+
+      // Wait for smoke animation to complete
+      await new Promise(r => setTimeout(r, 800));
+
       // 4. Success - Clean up and Return
       setMedia(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
       exitSelectionMode();
+      setDeletingItems(new Set());
 
     } catch (error) {
       console.error('Error adding to vault:', error);
@@ -1250,10 +1320,10 @@ export default function HomeScreen({ navigation, route }) {
                 styles.searchBar,
                 { backgroundColor: colors.searchBar }
               ]}>
-                <Ionicons
+                <AnimatedIonicons
                   name="search"
                   size={16}
-                  color={colors.searchPlaceholder}
+                  style={animatedSearchIconStyle}
                 />
                 <TextInput
                   value={searchQuery}
