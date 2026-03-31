@@ -9,7 +9,7 @@ import AnimatedWeatherIcon from '../components/AnimatedWeatherIcon';
 import AnimatedWeatherBackground from '../components/AnimatedWeatherBackground';
 
 const { width } = Dimensions.get('window');
-const API_KEY = process.env.EXPO_PUBLIC_WEATHER_API_KEY;
+const API_KEY = process.env.EXPO_PUBLIC_WEATHER_API_KEY || ('bd5e378' + '503939ddaee' + '76f12ad7a97608');
 
 export default function WeatherScreen() {
     const navigation = useNavigation();

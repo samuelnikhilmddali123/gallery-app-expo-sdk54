@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
+import Svg, { Defs, RadialGradient as SvgRadialGradient, Stop, Circle } from 'react-native-svg';
 import Animated, { 
     useSharedValue, 
     useAnimatedStyle, 
@@ -64,8 +65,6 @@ const SnowFlake = ({ delay, startX, duration, size }) => {
     
     return <Animated.View style={[styles.snowFlake, style]} />;
 };
-
-import Svg, { Defs, RadialGradient as SvgRadialGradient, Stop, Circle } from 'react-native-svg';
 
 // Realistic real-time moving fog/clouds using overlapping deep radial gradients
 const CloudLayer = ({ delay, startY, duration, size, reverse }) => {

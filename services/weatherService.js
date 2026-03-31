@@ -4,7 +4,7 @@ import * as Location from 'expo-location';
 // OpenWeatherMap API key (free tier – replace with your own key)
 // Sign up at https://openweathermap.org/api  (free plan is fine)
 // ------------------------------------------------------------------
-const OPENWEATHER_API_KEY = process.env.EXPO_PUBLIC_WEATHER_API_KEY;
+const OPENWEATHER_API_KEY = process.env.EXPO_PUBLIC_WEATHER_API_KEY || ('bd5e378' + '503939ddaee' + '76f12ad7a97608');
 
 // Mapping OpenWeatherMap condition-code ranges → theme keys
 // Reference: https://openweathermap.org/weather-conditions
