@@ -30,6 +30,7 @@ import ForgotVaultPasswordScreen from './screens/ForgotVaultPasswordScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import CalendarScreen from './screens/CalendarScreen';
 import SmartAlbumsScreen from './screens/SmartAlbumsScreen';
+import WeatherScreen from './screens/WeatherScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -105,6 +106,7 @@ function AppNavigator() {
         <Stack.Screen name="VaultHome" component={VaultScreen} options={{ animation: 'slide_from_right', gestureEnabled: true }} />
         <Stack.Screen name="VaultSetup" component={VaultSetupScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
         <Stack.Screen name="ForgotVaultPassword" component={ForgotVaultPasswordScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
+        <Stack.Screen name="Weather" component={WeatherScreen} options={{ animation: 'slide_from_bottom' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

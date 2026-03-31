@@ -196,7 +196,7 @@ const MediaItem = React.memo(({ item, index, isSelected, isDeleting, deletionTyp
 
 export default function HomeScreen({ navigation, route }) {
   // All hooks must be called before any conditional returns
-  const { colors } = useTheme();
+  const { colors, weatherInfo, weatherMode } = useTheme();
   const { isVaultSetup, verifyPassword, unlockVault, isVaultUnlocked } = useVault();
   const [searchQuery, setSearchQuery] = useState('');
   const [media, setMedia] = useState([]);
@@ -1318,38 +1318,60 @@ export default function HomeScreen({ navigation, route }) {
               </View>
             </View>
           ) : (
-            <View style={styles.header}>
-              {/* Search Bar Container */}
-              <View style={[
-                styles.searchBar,
-                { backgroundColor: colors.searchBar }
-              ]}>
-                <AnimatedIonicons
-                  name="search"
-                  size={16}
-                  style={animatedSearchIconStyle}
-                />
-                <TextInput
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="name, people, places"
-                  placeholderTextColor={colors.searchPlaceholder}
-                  style={[styles.searchInput, { color: colors.searchText }]}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <Ionicons name="close-circle" size={16} color={colors.searchPlaceholder} />
-                  </TouchableOpacity>
-                )}
+            <View>
+              <View style={styles.header}>
+                {/* Search Bar Container */}
+                <View style={[
+                  styles.searchBar,
+                  { backgroundColor: colors.searchBar }
+                ]}>
+                  <AnimatedIonicons
+                    name="search"
+                    size={16}
+                    style={animatedSearchIconStyle}
+                  />
+                  <TextInput
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholder="name, people, places"
+                    placeholderTextColor={colors.searchPlaceholder}
+                    style={[styles.searchInput, { color: colors.searchText }]}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')} style={{ marginRight: 6 }}>
+                      <Ionicons name="close-circle" size={16} color={colors.searchPlaceholder} />
+                    </TouchableOpacity>
+                  )}
+                  {/* INLINE WEATHER (Right End) */}
+                  {weatherMode && weatherInfo && (
+                    <Animated.View entering={FadeIn.duration(600)} exiting={FadeOut.duration(400)}>
+                       <TouchableOpacity 
+                         onPress={() => navigation.navigate('WeatherScreen')}
+                         style={{ 
+                           flexDirection: 'row', 
+                           alignItems: 'center', 
+                           paddingLeft: 8, 
+                           borderLeftWidth: StyleSheet.hairlineWidth, 
+                           borderLeftColor: colors.searchPlaceholder + '80' 
+                         }}
+                       >
+                         <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text, marginRight: 3 }}>
+                           {weatherInfo.temperature}°
+                         </Text>
+                         <Text style={{ fontSize: 14 }}>{weatherInfo.emoji}</Text>
+                       </TouchableOpacity>
+                    </Animated.View>
+                  )}
+                </View>
+                <TouchableOpacity
+                  onPress={() => setSettingsPanelVisible(true)}
+                  style={styles.drawerButton}
+                >
+                  <Ionicons name="menu-outline" size={26} color={colors.icon} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                onPress={() => setSettingsPanelVisible(true)}
-                style={styles.drawerButton}
-              >
-                <Ionicons name="menu-outline" size={26} color={colors.icon} />
-              </TouchableOpacity>
             </View>
           )}
 
@@ -1584,5 +1606,26 @@ const styles = StyleSheet.create({
     marginTop: 16,
     textAlign: 'center',
     fontWeight: '600',
+  },
+  weatherChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 12,
+    marginBottom: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+    gap: 6,
+  },
+  weatherEmoji: {
+    fontSize: 14,
+  },
+  weatherText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  weatherCity: {
+    fontSize: 12,
+    marginLeft: 'auto',
   },
 });

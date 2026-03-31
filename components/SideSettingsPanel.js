@@ -16,7 +16,7 @@ const PANEL_WIDTH = 300;
 const ANIMATION_DURATION = 350;
 
 export default function SideSettingsPanel({ visible, onClose }) {
-    const { isDarkMode, toggleDarkMode, colors } = useTheme();
+    const { isDarkMode, toggleDarkMode, colors, weatherMode, toggleWeatherMode, weatherData } = useTheme();
     const { isVaultSetup, deleteVault } = useVault();
     const navigation = useNavigation();
     const translateX = useSharedValue(PANEL_WIDTH);
@@ -128,6 +128,45 @@ export default function SideSettingsPanel({ visible, onClose }) {
                                     <Text style={[styles.navLabel, { color: colors.text }]}>Dark Mode</Text>
                                 </View>
                                 <Switch value={isDarkMode} onValueChange={toggleDarkMode} trackColor={{ false: '#767577', true: colors.primary }} />
+                            </View>
+
+                            {/* Weather Theme Toggle */}
+                            <View style={styles.navItem}>
+                                <TouchableOpacity 
+                                    style={styles.navLeft}
+                                    activeOpacity={0.7}
+                                    onPress={() => {
+                                        onClose();
+                                        setTimeout(() => navigation.navigate('Weather'), 150);
+                                    }}
+                                >
+                                    <View style={[styles.iconBg, { backgroundColor: (weatherMode ? colors.primary : colors.border) + '25' }]}>
+                                        <Text style={{ fontSize: 18 }}>
+                                            {weatherData ? ({
+                                              sunny: '☀️', partlyCloudy: '⛅', cloudy: '☁️',
+                                              rainy: '🌧️', stormy: '⛈️', snowy: '❄️',
+                                              foggy: '🌫️', night: '🌙'
+                                            }[weatherData.themeKey] || '🌤️') : '🌤️'}
+                                        </Text>
+                                    </View>
+                                    <View>
+                                        <Text style={[styles.navLabel, { color: colors.text }]}>Weather Theme</Text>
+                                        {weatherData && weatherMode && (
+                                            <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 1 }}>
+                                                {weatherData.temperature}°C · {weatherData.cityName}
+                                            </Text>
+                                        )}
+                                        {!weatherMode && (
+                                            <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 1 }}>Off – using manual theme</Text>
+                                        )}
+                                    </View>
+                                </TouchableOpacity>
+                                <Switch
+                                    value={weatherMode}
+                                    onValueChange={toggleWeatherMode}
+                                    trackColor={{ false: '#767577', true: colors.primary }}
+                                    thumbColor={weatherMode ? colors.primary : '#f4f3f4'}
+                                />
                             </View>
                         </ScrollView>
                     </SafeAreaView>
