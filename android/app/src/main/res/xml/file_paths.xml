@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths the app may share via FileProvider (content:// URIs). -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Entire shared / external storage (gallery paths like DCIM/Camera). -->
+  <external-path name="external_files" path="." />
+  <!-- App-private files if ever shared. -->
+  <files-path name="internal_files" path="." />
+  <cache-path name="internal_cache" path="." />
+</paths>

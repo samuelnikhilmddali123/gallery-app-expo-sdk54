@@ -37,6 +37,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Sharing from 'expo-sharing';
 import DropdownMenu from '../components/DropdownMenu';
 import SideSettingsPanel from '../components/SideSettingsPanel';
 import { useDialog } from '../contexts/DialogContext';
@@ -597,8 +598,15 @@ export default function HomeScreen({ navigation, route }) {
       if (NativeModules.MultiShare) {
         await NativeModules.MultiShare.shareImages(uris);
       } else {
-        // console.warn('NativeModules.MultiShare not found, falling back to basic sharing');
-        // Handle fallback if needed, but here we expect the module to exist
+        // Fallback for Expo Go (where custom native modules don't exist)
+        if (await Sharing.isAvailableAsync()) {
+            if (uris.length > 1) {
+                showAlert('Notice', 'Multi-sharing requires your custom dev client. Sharing the first item instead.');
+            }
+            await Sharing.shareAsync(uris[0]);
+        } else {
+            showAlert('Error', 'Sharing is not available on this device');
+        }
       }
 
     } catch (error) {
@@ -1348,7 +1356,7 @@ export default function HomeScreen({ navigation, route }) {
                   {weatherMode && weatherInfo && (
                     <Animated.View entering={FadeIn.duration(600)} exiting={FadeOut.duration(400)}>
                        <TouchableOpacity 
-                         onPress={() => navigation.navigate('WeatherScreen')}
+                        onPress={() => navigation.navigate('Weather')}
                          style={{ 
                            flexDirection: 'row', 
                            alignItems: 'center', 

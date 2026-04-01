@@ -37,18 +37,6 @@ export default function WeatherScreen() {
             const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
             const { latitude, longitude } = loc.coords;
 
-            // Get primary city using a highly-accurate Web Geocoder (fixes Android fetching local subregions/neighborhoods)
-            try {
-                const geoRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`);
-                const geoData = await geoRes.json();
-                
-                // geoData.city usually returns the exact primary city (e.g. Vijayawada instead of Yanamalakuduru)
-                const finalCity = geoData.city || geoData.locality || geoData.principalSubdivision;
-                setLocationName(finalCity);
-            } catch (fallbackErr) {
-                console.warn(fallbackErr);
-            }
-
             // Fetch forecast (5-day / 3-hour)
             const res = await fetch(`https://api.openweathermap.org/data/2.5/forecast?lat=${latitude}&lon=${longitude}&units=metric&appid=${API_KEY}`);
             const data = await res.json();
@@ -57,6 +45,21 @@ export default function WeatherScreen() {
             const currentRes = await fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${latitude}&lon=${longitude}&units=metric&appid=${API_KEY}`);
             const currentData = await currentRes.json();
             
+            // Get exact location natively like HomeScreen
+            try {
+                const geocode = await Location.reverseGeocodeAsync({ latitude, longitude });
+                if (geocode && geocode.length > 0) {
+                    const place = geocode[0];
+                    const exactName = place.city || place.subregion || place.district || currentData.name;
+                    setLocationName(exactName);
+                } else {
+                    setLocationName(currentData.name);
+                }
+            } catch (fallbackErr) {
+                console.warn(fallbackErr);
+                setLocationName(currentData.name || 'Unknown');
+            }
+
             setCurrent({
                 temp: Math.round(currentData.main.temp),
                 condition: currentData.weather[0].main,
@@ -246,13 +249,13 @@ const styles = StyleSheet.create({
     },
     waveContainer: {
         position: 'absolute',
-        bottom: 250, // aligns above bottom panel
+        bottom: 290, // aligns above bottom panel
         width: '100%',
         height: 120,
         zIndex: 1,
     },
     bottomSection: {
-        height: 250,
+        height: 290,
         backgroundColor: '#2A3554', // Slightly lighter blue-grey
         paddingTop: 20,
         zIndex: 3,
