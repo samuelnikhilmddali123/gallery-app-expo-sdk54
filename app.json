@@ -63,7 +63,8 @@
             "newArchEnabled": false
           }
         }
-      ]
+      ],
+      "expo-localization"
     ],
     "extra": {
       "eas": {

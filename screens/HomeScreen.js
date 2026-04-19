@@ -1512,6 +1512,7 @@ const styles = StyleSheet.create({
   grid: {
     padding: GAP / 2, // Adjusted for perfect edge-to-edge
     paddingTop: GAP,
+    paddingBottom: 100, // Minimalist padding for glass pill
   },
   item: {
     width: ITEM_SIZE,

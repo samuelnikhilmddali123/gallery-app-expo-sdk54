@@ -13,6 +13,7 @@ import { DialogProvider } from './contexts/DialogContext';
 import { AIProvider } from './contexts/AIContext';
 import { Ionicons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import CustomTabBar from './components/CustomTabBar';
 
 import HomeScreen from './screens/HomeScreen';
 import AlbumsScreen from './screens/AlbumsScreen';
@@ -41,32 +42,10 @@ function MainTabs() {
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
+      tabBar={props => <CustomTabBar {...props} />}
+      screenOptions={{
         headerShown: false,
-        tabBarIcon: ({ focused, color, size }) => {
-          let iconName;
-          if (focused) {
-            if (route.name === 'Home') iconName = 'home';
-            else if (route.name === 'Profile') iconName = 'person';
-          } else {
-            if (route.name === 'Home') iconName = 'home-outline';
-            else if (route.name === 'Profile') iconName = 'person-outline';
-          }
-          return <Ionicons name={iconName} size={size} color={color} />;
-        },
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSecondary,
-        tabBarShowLabel: false,
-        tabBarStyle: {
-          backgroundColor: colors.tabBarBackground,
-          borderTopWidth: 0,
-          height: 75 + insets.bottom,
-          paddingBottom: insets.bottom + 15,
-          paddingTop: 10,
-          elevation: 0,
-          shadowOpacity: 0,
-        },
-      })}
+      }}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
