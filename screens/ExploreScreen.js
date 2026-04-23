@@ -14,9 +14,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import * as MediaLibrary from 'expo-media-library';
-import { useTheme } from '../contexts/ThemeContext';
 import { filterVaultMedia } from '../services/mediaService';
 import { CATEGORIES, categorizeMedia } from '../services/categorizationService';
+import { useDialog } from '../contexts/DialogContext';
+
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = 2;
@@ -25,7 +26,9 @@ const CATEGORY_CARD_WIDTH = (width - GAP * (NUM_COLUMNS + 1)) / NUM_COLUMNS;
 
 export default function ExploreScreen({ navigation }) {
   const { colors } = useTheme();
+  const { showAlert } = useDialog();
   const [media, setMedia] = useState([]);
+
   const [categorizedMedia, setCategorizedMedia] = useState({});
   const [loading, setLoading] = useState(false); // Start with false for immediate UI
   const [categorizing, setCategorizing] = useState(false);
@@ -98,8 +101,9 @@ export default function ExploreScreen({ navigation }) {
     } catch (error) {
       console.error('Error loading media:', error);
       if (refresh) {
-        Alert.alert('Error', 'Failed to load media. Please try again.');
+        showAlert('Error', 'Failed to load media. Please try again.', null, 'error');
       }
+
       if (refresh) setLoading(false);
     }
   };

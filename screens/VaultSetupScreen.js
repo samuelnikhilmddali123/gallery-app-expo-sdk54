@@ -11,6 +11,8 @@ import {
   Platform,
   BackHandler,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
+
 import { useNavigation } from '@react-navigation/native';
 import { useDialog } from '../contexts/DialogContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -93,7 +95,9 @@ export default function VaultSetupScreen({ onComplete, onCancel }) {
     if (success) {
       // Automatically unlock the vault after setup
       unlockVault();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showAlert('Success', 'Vault setup completed successfully', () => {
+
         if (onComplete) {
           onComplete();
         } else {
@@ -114,9 +118,16 @@ export default function VaultSetupScreen({ onComplete, onCancel }) {
       <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]} edges={['top', 'bottom']}>
         {/* Header with Close Button */}
         <View style={[styles.topHeader, { borderBottomColor: colors.border }]}>
-          <TouchableOpacity onPress={handleCancel} style={styles.closeButton}>
+          <TouchableOpacity 
+            onPress={() => {
+              Haptics.selectionAsync();
+              handleCancel();
+            }} 
+            style={styles.closeButton}
+          >
             <Ionicons name="close" size={24} color={colors.icon} />
           </TouchableOpacity>
+
           <Text style={[styles.headerTitle, { color: colors.text }]}>Vault Setup</Text>
           <View style={styles.closeButton} />
         </View>

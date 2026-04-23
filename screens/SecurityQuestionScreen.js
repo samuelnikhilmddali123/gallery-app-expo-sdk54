@@ -16,10 +16,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
+import { useDialog } from '../contexts/DialogContext';
+
 
 export default function SecurityQuestionScreen({ onUnlock }) {
   const { colors } = useTheme();
   const { verifySecurityQuestions, getSecurityQuestions, isLoading } = useVault();
+  const { showAlert } = useDialog();
+
   
   const [answers, setAnswers] = useState(['', '', '']);
   const [attempts, setAttempts] = useState(0);
@@ -31,13 +35,15 @@ export default function SecurityQuestionScreen({ onUnlock }) {
   // Prevent back button on Android
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      Alert.alert(
+      showAlert(
         'Exit App',
         'You must answer security questions to access the gallery.',
-        [{ text: 'OK' }]
+        null,
+        'info'
       );
       return true;
     });
+
 
     return () => backHandler.remove();
   }, []);
@@ -57,9 +63,10 @@ export default function SecurityQuestionScreen({ onUnlock }) {
   const handleVerify = async () => {
     // Check if all answers are filled
     if (answers.some(a => !a.trim())) {
-      Alert.alert('Error', 'Please answer all security questions');
+      showAlert('Error', 'Please answer all security questions', null, 'error');
       return;
     }
+
 
     setIsVerifying(true);
 
@@ -76,29 +83,34 @@ export default function SecurityQuestionScreen({ onUnlock }) {
         setAttempts(prev => prev + 1);
         
         if (attempts >= 2) {
-          Alert.alert(
+          showAlert(
             'Too Many Attempts',
             'You have exceeded the maximum number of attempts. Please try again later.',
-            [{ text: 'OK' }]
+            null,
+            'error'
           );
+
           // Clear answers and reset attempts after a delay
           setTimeout(() => {
             setAnswers(['', '', '']);
             setAttempts(0);
           }, 2000);
         } else {
-          Alert.alert(
+          showAlert(
             'Incorrect Answers',
             `Incorrect answers. You have ${3 - attempts - 1} attempt(s) remaining.`,
-            [{ text: 'OK' }]
+            null,
+            'warning'
           );
+
           setAnswers(['', '', '']);
         }
       }
     } catch (error) {
       console.error('Error verifying security questions:', error);
-      Alert.alert('Error', 'Failed to verify answers. Please try again.');
+      showAlert('Error', 'Failed to verify answers. Please try again.', null, 'error');
     } finally {
+
       setIsVerifying(false);
     }
   };

@@ -12,6 +12,8 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
+
 import { useDialog } from '../contexts/DialogContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -477,8 +479,14 @@ export default function SettingsScreen({ navigation }) {
                       borderBottomColor: colors.searchBar,
                     },
                   ]}
-                  onPress={item.onPress}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    if (item.onPress) {
+                      item.onPress();
+                    }
+                  }}
                   activeOpacity={0.7}
+
                 >
                   <View style={styles.settingLeft}>
                     <Ionicons
@@ -506,10 +514,12 @@ export default function SettingsScreen({ navigation }) {
                     <Switch
                       value={item.value}
                       onValueChange={() => {
+                        Haptics.selectionAsync();
                         if (item.onPress) {
                           item.onPress();
                         }
                       }}
+
                       trackColor={{ false: colors.searchBar, true: colors.icon }}
                       thumbColor={item.value ? '#fff' : '#f4f3f4'}
                     />

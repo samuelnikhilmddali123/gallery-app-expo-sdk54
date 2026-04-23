@@ -7,14 +7,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Sharing from 'expo-sharing';
+import * as Haptics from 'expo-haptics';
+
 
 import { useTheme } from '../contexts/ThemeContext';
 import { useNavigation, CommonActions, useFocusEffect } from '@react-navigation/native';
 import * as MediaLibrary from 'expo-media-library';
 import ZoomableImage from '../components/ZoomableImage';
 import { useDialog } from '../contexts/DialogContext';
-import { moveToSystemTrash } from '../services/mediaService';
+import { moveMediaToAppTrash } from '../services/trashService';
+
 import * as ScreenOrientation from 'expo-screen-orientation';
+
+
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS, useAnimatedReaction, useDerivedValue } from 'react-native-reanimated';
 
 // Get initial dimensions
@@ -492,7 +497,14 @@ const CustomVideoControls = ({
         onStartShouldSetResponder={() => true}
         pointerEvents="auto"
       >
-        <TouchableOpacity onPress={onPlayPause} style={controlStyles.smallControlBtn}>
+        <TouchableOpacity 
+          onPress={() => {
+            Haptics.selectionAsync();
+            onPlayPause();
+          }} 
+          style={controlStyles.smallControlBtn}
+        >
+
           <Ionicons name={isPlaying ? "pause" : "play"} size={24} color="white" />
         </TouchableOpacity>
 
@@ -531,7 +543,14 @@ const CustomVideoControls = ({
             <Ionicons name="settings-outline" size={22} color="white" />
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={onToggleFullscreen} style={controlStyles.smallControlBtn}>
+          <TouchableOpacity 
+            onPress={() => {
+              Haptics.selectionAsync();
+              onToggleFullscreen();
+            }} 
+            style={controlStyles.smallControlBtn}
+          >
+
             <Ionicons name={isLandscape ? "contract-outline" : "scan-outline"} size={24} color="white" />
           </TouchableOpacity>
         </View>
@@ -558,47 +577,42 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   const hasRestoredRef = useRef(false);
   const wasPlayingBeforeScrubRef = useRef(false);
 
-  // 1. Resolve URI
+  // 1. Resolve URI - OPTIMIZED for speed
   useEffect(() => {
     let isMounted = true;
     const loadUri = async () => {
       try {
-        let uri = null;
         const isVault = mediaItem.id && mediaItem.id.toString().startsWith('vault_');
         const isTrash = mediaItem.isTrash || mediaItem.isAppTrash;
-        let initialUri = (isVault || isTrash)
+        
+        // IMMEDIATE URI: Use what we have from HomeScreen/Props first
+        const primaryUri = (isVault || isTrash)
           ? (mediaItem.filePath || mediaItem.uri || mediaItem.localUri)
           : (mediaItem.uri || mediaItem.localUri || mediaItem.filePath);
 
-        if (isVault || isTrash) {
-          uri = initialUri;
-        } else if (mediaItem.id && !mediaItem.id.toString().startsWith('picked_') && !mediaItem.id.toString().startsWith('temp_')) {
+        if (isMounted && primaryUri) {
+          setVideoUri(primaryUri);
+          setIsReady(true);
+        }
+
+        // BACKGROUND ENHANCEMENT: Try to get info in background but don't block
+        if (!isVault && !isTrash && mediaItem.id && !mediaItem.id.toString().startsWith('picked_') && !mediaItem.id.toString().startsWith('temp_')) {
           const { status } = await MediaLibrary.requestPermissionsAsync();
           if (status === 'granted') {
             try {
               const asset = await MediaLibrary.getAssetInfoAsync(mediaItem.id);
-              if (asset) {
-                uri = (Platform.OS === 'android') ? (asset.uri || asset.localUri) : (asset.localUri || asset.uri);
-              } else {
-                uri = initialUri;
+              if (isMounted && asset) {
+                const betterUri = (Platform.OS === 'android') ? (asset.uri || asset.localUri) : (asset.localUri || asset.uri);
+                if (betterUri && betterUri !== primaryUri) {
+                  setVideoUri(betterUri);
+                }
               }
-            } catch (err) {
-              uri = initialUri;
-            }
-          } else {
-            uri = initialUri;
+            } catch (err) { /* silent fallback */ }
           }
-        } else {
-          uri = initialUri;
         }
-
-        if (isMounted) {
-          if (uri) {
-            setVideoUri(uri);
-            setIsReady(true);
-          } else {
-            setLoadError(true);
-          }
+        
+        if (isMounted && !primaryUri) {
+          setLoadError(true);
         }
       } catch (e) {
         console.error("VideoContent: Error resolving URI", e);
@@ -616,14 +630,11 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
   // Handle source updates reactively
   useEffect(() => {
     if (player && videoUri) {
-      console.log(`VideoContent: Updating player source to ${videoUri}`);
       player.replace(videoUri);
       
       // Auto-play if component is already active
       if (isActive) {
-        console.log('VideoContent: Auto-playing after source update');
         player.play();
-        setShouldShowVideo(true);
         setHasInteracted(true);
       }
     }
@@ -639,7 +650,6 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     if (!player) return;
     if (isActive) {
       player.play();
-      setShouldShowVideo(true);
       setHasInteracted(true);
     } else {
       player.pause();
@@ -687,6 +697,7 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
     const statusSub = player.addListener('statusChange', ({ status: newStatus }) => {
       console.log(`VideoContent: statusChange: ${newStatus}`);
       if (newStatus === 'readyToPlay') {
+        setShouldShowVideo(true); // SHOW video only when ready
         if (player.duration > 0) {
           setDuration(player.duration);
         }
@@ -805,10 +816,6 @@ const VideoContent = ({ mediaItem, isActive, onToggleUI, videoStates, dimensions
         <Text style={{ color: 'white', marginTop: 10 }}>Failed to load video</Text>
       </View>
     );
-  }
-
-  if (!isReady || !videoUri) {
-    return <View style={{ width: dimensions.width, height: dimensions.height, backgroundColor: '#000' }} />;
   }
 
   return (
@@ -1087,12 +1094,13 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const [isZoomed, setIsZoomed] = useState(false);
   
   // Debug Log output exactly matching requested schema
-  const currentItemSnapshot = mediaItems[currentIndex];
-  useEffect(() => {
-    if (currentItemSnapshot) {
-      console.log("Opened:", currentItemSnapshot.id, currentItemSnapshot.uri);
-    }
-  }, [currentIndex, currentItemSnapshot]);
+  // const currentItemSnapshot = mediaItems[currentIndex];
+  // useEffect(() => {
+  //   if (currentItemSnapshot) {
+  //     console.log("Opened:", currentItemSnapshot.id, currentItemSnapshot.uri);
+  //   }
+  // }, [currentIndex, currentItemSnapshot]);
+
   const flatListRef = useRef(null);
   // Persist video playback state across rotation/re-renders
   const videoStates = useRef({});
@@ -1112,7 +1120,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   }, [currentIndex]);
 
   // Dialog Context
-  const { showConfirm, showAlert } = useDialog();
+  const { showConfirm, showAlert, showCustomConfirm } = useDialog();
 
   // Toggle Controls Logic
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -1142,13 +1150,11 @@ export default function ViewerScreen({ route, navigation: navProp }) {
 
     // Listen for dimension changes (orientation changes)
     const dimensionSubscription = Dimensions.addEventListener('change', ({ window }) => {
-      console.log('ViewerScreen: Dimensions changed:', window.width, 'x', window.height);
+      // console.log('ViewerScreen: Dimensions changed:', window.width, 'x', window.height);
+
 
       // 1. Mark rotation as in-progress immediately
       isRotatingRef.current = true;
-
-      // 2. Capture stable index BEFORE state updates
-      const stableIndex = currentIndexRef.current;
 
       // 3. Fade out FlatList to hide the blink/jump
       rotationOpacity.value = 0;
@@ -1162,9 +1168,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
       // Using a slightly longer delay to ensure FlatList layout cycle completes
       setTimeout(() => {
         if (flatListRef.current) {
-          console.log('ViewerScreen: Correcting scroll to index', stableIndex);
+          console.log('ViewerScreen: Correcting scroll to index', currentIndexRef.current);
           flatListRef.current.scrollToIndex({
-            index: stableIndex,
+            index: currentIndexRef.current,
             animated: false,
             viewPosition: 0
           });
@@ -1217,11 +1223,12 @@ export default function ViewerScreen({ route, navigation: navProp }) {
 
   // Preload adjacent images to keep paging smooth.
   useEffect(() => {
-    const nearbyUris = [currentIndex - 1, currentIndex + 1]
+    const nearbyUris = [currentIndex - 2, currentIndex - 1, currentIndex + 1, currentIndex + 2]
       .map((index) => mediaItems[index])
       .filter((item) => item && !isVideoItem(item))
       .map((item) => item.uri || item.localUri || item.filePath)
       .filter(Boolean);
+
 
     if (nearbyUris.length > 0) {
       Image.prefetch(nearbyUris).catch(() => { });
@@ -1265,32 +1272,95 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const handleDelete = () => {
     if (!currentItem) return;
 
-    showConfirm(
+    showCustomConfirm(
       'Delete photo?',
-      'This item will be moved to trash.',
-      async () => {
-        try {
-          const success = await moveToSystemTrash(currentItem);
-          if (success) {
-            const newItems = [...mediaItems];
-            newItems.splice(currentIndex, 1);
-            if (newItems.length === 0) navigation.goBack();
-            else {
-              setMediaItems(newItems);
-              setCurrentIndex(curr => Math.min(curr, newItems.length - 1));
-              setIsZoomed(false);
+      'Choose how you want to delete this item.',
+      [
+        {
+          text: 'Trash',
+          style: 'default',
+          onPress: async () => {
+            try {
+              // 1. Move to app trash (copy + backup)
+              await moveMediaToAppTrash(currentItem);
+              
+              const idStr = (currentItem.id || '').toString();
+              if (idStr && !idStr.startsWith('vault_') && !idStr.startsWith('picked_') && !idStr.startsWith('temp_')) {
+                // 2. Trigger native delete dialog for MediaStore
+                const success = await MediaLibrary.deleteAssetsAsync([currentItem.id.toString()]);
+                if (success) {
+                  // UI updates
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  const newItems = [...mediaItems];
+                  newItems.splice(currentIndex, 1);
+                  if (newItems.length === 0) navigation.goBack();
+                  else {
+                    setMediaItems(newItems);
+                    setCurrentIndex(curr => Math.min(curr, newItems.length - 1));
+                    setIsZoomed(false);
+                    showAlert('Success', 'Moved to trash', null, 'success');
+                  }
+                }
+              } else {
+                // Vault or other non-medialibrary items
+                const newItems = [...mediaItems];
+                newItems.splice(currentIndex, 1);
+                if (newItems.length === 0) navigation.goBack();
+                else {
+                  setMediaItems(newItems);
+                  setCurrentIndex(curr => Math.min(curr, newItems.length - 1));
+                  setIsZoomed(false);
+                  showAlert('Success', 'Moved to trash', null, 'success');
+                }
+              }
+            } catch (error) {
+              console.error('Viewer Trash error:', error);
+              showAlert('Error', 'Failed to move to trash', null, 'error');
             }
-          } else {
-            showAlert('Error', 'Failed to move to trash');
           }
-        } catch (e) {
-          showAlert('Error', 'Failed to move to trash');
+        },
+        {
+          text: 'Permanently delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const idStr = (currentItem.id || '').toString();
+              if (idStr && !idStr.startsWith('vault_') && !idStr.startsWith('picked_') && !idStr.startsWith('temp_')) {
+                const success = await MediaLibrary.deleteAssetsAsync([currentItem.id.toString()]);
+                if (success) {
+                  const newItems = [...mediaItems];
+                  newItems.splice(currentIndex, 1);
+                  if (newItems.length === 0) navigation.goBack();
+                  else {
+                    setMediaItems(newItems);
+                    setCurrentIndex(curr => Math.min(curr, newItems.length - 1));
+                    setIsZoomed(false);
+                  }
+                }
+              } else {
+                const newItems = [...mediaItems];
+                newItems.splice(currentIndex, 1);
+                if (newItems.length === 0) navigation.goBack();
+                else {
+                  setMediaItems(newItems);
+                  setCurrentIndex(curr => Math.min(curr, newItems.length - 1));
+                  setIsZoomed(false);
+                }
+              }
+            } catch (error) {
+              console.error('Viewer Permanent delete error:', error);
+              showAlert('Error', 'Failed to delete permanently', null, 'error');
+            }
+          }
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel'
         }
-      },
-      null, // Cancel callback (optional)
-      true // Destructive
+      ]
     );
   };
+
 
   const handleShare = async () => {
     if (shareInProgressRef.current) return;
@@ -1308,17 +1378,19 @@ export default function ViewerScreen({ route, navigation: navProp }) {
       if (uri) {
         console.log(`Viewer: Sharing item via NativeModules.MultiShare`);
         if (NativeModules.MultiShare) {
+          // Success feedback for sharing
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           // Pass as an array even for single item for consistency
           await NativeModules.MultiShare.shareImages([uri]);
         } else {
+
           console.warn('NativeModules.MultiShare not found');
         }
       }
     } catch (error) {
       const errorMsg = error.message || '';
       if (!errorMsg.includes('User did not share') && !errorMsg.includes('User cancelled')) {
-        console.error('Viewer: Share error:', errorMsg);
-        showAlert('Error', 'Failed to share item');
+        showAlert('Error', 'Failed to share item', null, 'error');
       }
     } finally {
       // Safely reset guard after a delay
@@ -1329,9 +1401,12 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   };
 
   const handleEdit = () => {
-    if (isVideoItem(currentItem)) return showAlert('Info', 'Video editing not supported');
+    if (isVideoItem(currentItem)) return showAlert('Info', 'Video editing not supported', null, 'info');
     navigation.dispatch(CommonActions.navigate({ name: 'EditPhoto', params: { item: currentItem } }));
   };
+
+
+
 
   const renderItem = useCallback(({ item, index }) => {
     // Logic for aggressive memory management
@@ -1434,22 +1509,28 @@ export default function ViewerScreen({ route, navigation: navProp }) {
         <Animated.View style={[styles.safeArea, topBarStyle]} pointerEvents={controlsVisible ? 'auto' : 'none'}>
           <SafeAreaView edges={['top']}>
             <View style={styles.topBar}>
-              <TouchableOpacity onPress={handleBackPress} style={styles.actionButton}>
+              <TouchableOpacity onPress={() => { Haptics.selectionAsync(); handleBackPress(); }} style={styles.actionButton}>
                 <Ionicons name="arrow-back" size={24} color="#fff" />
               </TouchableOpacity>
+
               <View style={{ flex: 1 }} />
               <View style={styles.actionButtons}>
-                <TouchableOpacity onPress={handleDelete} style={styles.actionButton}>
+                <TouchableOpacity onPress={() => { Haptics.selectionAsync(); handleDelete(); }} style={styles.actionButton}>
                   <Ionicons name="trash-outline" size={24} color="#fff" />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={handleShare} style={styles.actionButton}>
+                <TouchableOpacity onPress={() => { Haptics.selectionAsync(); handleShare(); }} style={styles.actionButton}>
                   <Ionicons name="share-outline" size={24} color="#fff" />
                 </TouchableOpacity>
                 {isPhoto && !isLandscape && (
-                  <TouchableOpacity onPress={handleEdit} style={styles.actionButton}>
-                    <Ionicons name="create-outline" size={24} color="#fff" />
-                  </TouchableOpacity>
+                  <>
+                    <TouchableOpacity onPress={() => { Haptics.selectionAsync(); handleEdit(); }} style={styles.actionButton}>
+                      <Ionicons name="create-outline" size={24} color="#fff" />
+                    </TouchableOpacity>
+                  </>
                 )}
+
+
+
               </View>
             </View>
           </SafeAreaView>

@@ -18,6 +18,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
+import * as Haptics from 'expo-haptics';
+
 import { useTheme } from '../contexts/ThemeContext';
 import { getFolders, createFolder, renameFolder, deleteFolder, updateFolderCover } from '../services/folderService';
 import { useDialog } from '../contexts/DialogContext';
@@ -250,7 +252,11 @@ export default function FoldersScreen({ navigation }) {
     };
 
     const handleLongPress = useCallback((folder) => {
+        // Impact feedback for long press
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
         showDialog({
+
             title: folder.name,
             message: 'Select an action',
             actions: [
@@ -294,12 +300,16 @@ export default function FoldersScreen({ navigation }) {
     const renderFolderItem = useCallback(({ item }) => (
         <FolderItem
             item={item}
-            onPress={() => navigation.navigate('FolderDetail', { folderId: item.id, folderName: item.name })}
+            onPress={() => {
+                Haptics.selectionAsync();
+                navigation.navigate('FolderDetail', { folderId: item.id, folderName: item.name });
+            }}
             onLongPress={() => handleLongPress(item)}
             colors={colors}
             isDarkMode={isDarkMode}
             size={getItemSize(dimensions.width)}
         />
+
     ), [navigation, colors, handleLongPress, isDarkMode, dimensions.width]);
 
     return (
@@ -434,11 +444,15 @@ export default function FoldersScreen({ navigation }) {
                             shadowRadius: isDarkMode ? 3.84 : 2,
                         }
                     ]}
-                    onPress={() => setCreateModalVisible(true)}
+                    onPress={() => {
+                        Haptics.selectionAsync();
+                        setCreateModalVisible(true);
+                    }}
                     activeOpacity={0.8}
                 >
                     <Ionicons name="add" size={32} color="#FFF" />
                 </TouchableOpacity>
+
 
             </SafeAreaView>
         </View >

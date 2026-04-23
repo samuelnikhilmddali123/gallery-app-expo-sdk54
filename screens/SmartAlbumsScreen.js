@@ -9,6 +9,11 @@ import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAI } from '../contexts/AIContext';
+import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
+import { useDialog } from '../contexts/DialogContext';
+
+
 import { CATEGORY_RULES } from '../services/aiService';
 import Animated, { 
   useSharedValue, 
@@ -70,9 +75,11 @@ const FloatingPhoto = ({ uri, onComplete }) => {
 };
 
 export default function SmartAlbumsScreen({ navigation }) {
-  const { colors } = useTheme();
+  const { colors, isDarkMode } = useTheme();
+  const { showConfirm, showAlert } = useDialog();
   const { isAnalyzing, progress, lastScannedUri, results, scannedAt, isSupported, startScan, clearResults } = useAI();
   const [mediaMap, setMediaMap] = useState({});
+
   const [activeTab, setActiveTab] = useState('goodPics');
   const [fullMediaItems, setFullMediaItems] = useState([]); // Array of full asset objects for viewer
   const [scanStream, setScanStream] = useState([]); // Local store for floating items
@@ -153,10 +160,22 @@ export default function SmartAlbumsScreen({ navigation }) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={24} color={colors.text} />
+        <TouchableOpacity 
+          onPress={() => {
+            Haptics.selectionAsync();
+            navigation.goBack();
+          }} 
+          style={styles.backBtn}
+        >
+          <BlurView
+            intensity={30}
+            tint={isDarkMode ? 'dark' : 'light'}
+            style={styles.backBtnGlass}
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </BlurView>
         </TouchableOpacity>
-        <View>
+        <View style={styles.headerTextContainer}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>AI Smart Albums</Text>
           {scannedAt && (
             <Text style={[styles.headerSub, { color: colors.textSecondary }]}>
@@ -164,51 +183,78 @@ export default function SmartAlbumsScreen({ navigation }) {
             </Text>
           )}
         </View>
-        {results && (
-          <TouchableOpacity onPress={() => {
-              Alert.alert('Clear AI Results', 'Remove all AI scan results and start fresh?', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Clear', style: 'destructive', onPress: clearResults }
-              ]);
-          }} style={styles.backBtn}>
-            <Ionicons name="trash-outline" size={22} color={colors.textSecondary} />
-          </TouchableOpacity>
-        )}
+        <View style={styles.headerRight}>
+          {results && (
+            <TouchableOpacity onPress={() => {
+                Haptics.selectionAsync();
+                showConfirm(
+                  'Clear AI Results', 
+                  'Remove all AI scan results and start fresh?', 
+                  clearResults,
+                  null,
+                  true
+                );
+            }} style={styles.backBtn}>
+              <BlurView
+                intensity={30}
+                tint={isDarkMode ? 'dark' : 'light'}
+                style={styles.backBtnGlass}
+              >
+                <Ionicons name="trash-outline" size={20} color={colors.textSecondary} />
+              </BlurView>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Scan Button Area */}
       {!results && !isAnalyzing && (
-        <View style={styles.scanPrompt}>
-          <View style={[styles.aiIconCircle, { backgroundColor: colors.accent }]}>
-            <Ionicons name="sparkles" size={48} color={colors.primary} />
-          </View>
-          <Text style={[styles.scanTitle, { color: colors.text }]}>Discover Your Best Moments</Text>
-          <Text style={[styles.scanDesc, { color: colors.textSecondary }]}>
-            Our on-device AI will scan your gallery locally and automatically sort photos into{' '}
-            <Text style={{ color: colors.primary, fontWeight: '700' }}>Good Pics</Text>,{' '}
-            <Text style={{ color: colors.primary, fontWeight: '700' }}>Family Pics</Text>, and more.
-          </Text>
-
-          <TouchableOpacity
-            style={[styles.scanButton, { backgroundColor: colors.primary }]}
-            onPress={startScan}
+        <View style={styles.scanPromptContainer}>
+          <BlurView
+            intensity={40}
+            tint={isDarkMode ? 'dark' : 'light'}
+            style={[styles.scanCard, { borderColor: isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.05)' }]}
           >
-            <Ionicons name="sparkles" size={20} color="#fff" />
-            <Text style={styles.scanButtonText}>Scan My Gallery with AI</Text>
-          </TouchableOpacity>
-
-          <View style={[styles.infoBox, { backgroundColor: colors.accent, borderColor: colors.primary + '33' }]}>
-            <Ionicons name="shield-checkmark-outline" size={16} color={colors.primary} />
-            <Text style={[styles.infoText, { color: colors.primary }]}>
-              Private & Secure. All processing happens locally on your device. No data ever leaves your phone.
+            <View style={[styles.aiIconCircle, { backgroundColor: colors.primary + '15' }]}>
+              <Ionicons name="sparkles" size={48} color={colors.primary} />
+            </View>
+            <Text style={[styles.scanTitle, { color: colors.text }]}>Discover Your Best Moments</Text>
+            <Text style={[styles.scanDesc, { color: colors.textSecondary }]}>
+              Our on-device AI will scan your gallery locally and automatically sort photos into{' '}
+              <Text style={{ color: colors.primary, fontWeight: '700' }}>Good Pics</Text>,{' '}
+              <Text style={{ color: colors.primary, fontWeight: '700' }}>Family Pics</Text>, and more.
             </Text>
-          </View>
+
+            <TouchableOpacity
+              style={[styles.scanButton, { backgroundColor: colors.primary }]}
+              onPress={() => {
+                Haptics.selectionAsync();
+                startScan();
+              }}
+            >
+              <Ionicons name="sparkles" size={20} color="#fff" />
+              <Text style={styles.scanButtonText}>Scan My Gallery with AI</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.infoBox, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderColor: colors.primary + '22' }]}>
+              <Ionicons name="shield-checkmark-outline" size={16} color={colors.primary} />
+              <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                Private & Secure. All processing happens locally on your device. No data ever leaves your phone.
+              </Text>
+            </View>
+          </BlurView>
         </View>
       )}
 
       {/* Scanning Progress */}
       {isAnalyzing && (
         <View style={styles.scanningOverlay}>
+          <BlurView
+            intensity={60}
+            tint={isDarkMode ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFillObject}
+          />
+          
           {/* Floating Smoke Items */}
           <View style={styles.smokeContainer} pointerEvents="none">
             {scanStream.map((item) => (
@@ -221,13 +267,13 @@ export default function SmartAlbumsScreen({ navigation }) {
           </View>
 
           <View style={styles.scanPrompt}>
-            <Text style={[styles.scanTitle, { color: colors.text, marginTop: 100 }]}>AI Analysis in Progress…</Text>
+            <Text style={[styles.scanTitle, { color: colors.text }]}>AI Analysis in Progress…</Text>
             <Text style={[styles.scanDesc, { color: colors.textSecondary }]}>
               Finding your best moments • {progress.current}/{progress.total}
             </Text>
             <Text style={[styles.smokeHint, { color: colors.primary }]}>Analysis continues even if you close this screen ✨</Text>
             
-            <View style={[styles.progressBarFull, { backgroundColor: colors.border }]}>
+            <View style={[styles.progressBarFull, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}>
               <View style={[styles.progressFill, {
                 backgroundColor: colors.primary,
                 width: progress.total > 0 ? `${(progress.current / progress.total) * 100}%` : '5%'
@@ -252,10 +298,15 @@ export default function SmartAlbumsScreen({ navigation }) {
                 key={tab.key}
                 style={[
                   styles.tab,
-                  { backgroundColor: activeTab === tab.key ? colors.primary : colors.surface,
-                    borderColor: activeTab === tab.key ? colors.primary : colors.border }
+                  { 
+                    backgroundColor: activeTab === tab.key ? colors.primary : (isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.03)'),
+                    borderColor: activeTab === tab.key ? colors.primary : (isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)')
+                  }
                 ]}
-                onPress={() => setActiveTab(tab.key)}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setActiveTab(tab.key);
+                }}
               >
                 <Ionicons
                   name={tab.icon}
@@ -266,7 +317,7 @@ export default function SmartAlbumsScreen({ navigation }) {
                   {tab.label}
                 </Text>
                 <View style={[styles.tabBadge, {
-                  backgroundColor: activeTab === tab.key ? 'rgba(255,255,255,0.3)' : colors.border
+                  backgroundColor: activeTab === tab.key ? 'rgba(255,255,255,0.25)' : (isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)')
                 }]}>
                   <Text style={[styles.tabCount, { color: activeTab === tab.key ? '#fff' : colors.textSecondary }]}>
                     {tab.count}
@@ -316,152 +367,184 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    zIndex: 110,
   },
-  backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700' },
-  headerSub: { fontSize: 12, marginTop: 1 },
-  scanPrompt: {
-    flex: 1,
-    alignItems: 'center',
+  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+  backBtnGlass: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 16,
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  headerTextContainer: { flex: 1, alignItems: 'center' },
+  headerRight: { width: 44 },
+  headerTitle: { fontSize: 18, fontWeight: '700' },
+  headerSub: { fontSize: 12, marginTop: 2 },
+  scanPromptContainer: {
+    flex: 1,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+  },
+  scanCard: {
+    padding: 30,
+    borderRadius: 32,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 10,
+    overflow: 'hidden',
   },
   aiIconCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 90,
+    height: 90,
+    borderRadius: 45,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 20,
   },
-  scanTitle: { fontSize: 22, fontWeight: '800', textAlign: 'center' },
-  scanDesc: { fontSize: 15, textAlign: 'center', lineHeight: 22 },
+  scanTitle: { fontSize: 24, fontWeight: '800', textAlign: 'center', marginBottom: 12 },
+  scanDesc: { fontSize: 16, textAlign: 'center', lineHeight: 24, marginBottom: 20 },
   scanButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 28,
-    paddingVertical: 16,
+    gap: 12,
+    paddingHorizontal: 30,
+    paddingVertical: 18,
     borderRadius: 30,
-    marginTop: 8,
-    elevation: 4,
+    marginBottom: 20,
     shadowColor: '#7B61FF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 8,
   },
   scanButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   infoBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
-    padding: 12,
-    borderRadius: 12,
+    gap: 10,
+    padding: 16,
+    borderRadius: 16,
     borderWidth: 1,
-    marginTop: 4,
   },
-  infoText: { fontSize: 12, flex: 1, lineHeight: 18 },
-  tabsScroll: { flexGrow: 0, marginTop: 8 },
-  tabs: { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },
+  infoText: { fontSize: 13, flex: 1, lineHeight: 20 },
+  tabsScroll: { flexGrow: 0, marginTop: 10 },
+  tabs: { paddingHorizontal: 20, gap: 10, paddingVertical: 8 },
   tab: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 25,
     borderWidth: 1,
   },
-  tabLabel: { fontSize: 13, fontWeight: '600' },
+  tabLabel: { fontSize: 14, fontWeight: '600' },
   tabBadge: {
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
+    minWidth: 22,
+    height: 18,
+    borderRadius: 9,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 5,
+    paddingHorizontal: 6,
   },
-  tabCount: { fontSize: 11, fontWeight: '700' },
-  grid: { padding: 12, gap: 4 },
+  tabCount: { fontSize: 10, fontWeight: '700' },
+  grid: { padding: 16, gap: 4 },
   thumb: {
     width: THUMB,
     height: THUMB,
-    borderRadius: 8,
-    margin: 2,
+    borderRadius: 12,
+    margin: 4,
     overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  thumbImage: { width: '100%', height: '100%' },
+  thumbImage: { width: '100%', height: '100%', borderRadius: 12 },
   emptyResult: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    gap: 16,
+    paddingTop: 100,
   },
-  emptyText: { fontSize: 15, textAlign: 'center' },
+  emptyText: { fontSize: 16, textAlign: 'center', opacity: 0.6 },
   footer: {
-      paddingBottom: 16
+      paddingBottom: 20
   },
   rescanButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    marginHorizontal: 16,
-    padding: 14,
-    borderRadius: 20,
+    gap: 10,
+    marginHorizontal: 20,
+    padding: 16,
+    borderRadius: 24,
     borderWidth: 1.5,
   },
   rescanText: { fontSize: 15, fontWeight: '600' },
   scanningOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.95)',
     zIndex: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanPrompt: {
+    width: '90%',
+    padding: 30,
+    alignItems: 'center',
+    gap: 10,
+    zIndex: 101,
   },
   smokeHint: { 
     fontSize: 14, 
     fontWeight: '600', 
-    marginTop: 10,
+    marginTop: 15,
     fontStyle: 'italic',
-    opacity: 0.8,
+    paddingHorizontal: 20,
     textAlign: 'center'
   },
   progressBarFull: {
     width: '100%',
-    height: 10,
-    borderRadius: 5,
+    height: 12,
+    borderRadius: 6,
     overflow: 'hidden',
-    marginTop: 20,
+    marginTop: 25,
   },
-  progressFill: { height: '100%', borderRadius: 4 },
+  progressFill: { height: '100%', borderRadius: 6 },
   floatingPhoto: {
     position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#fff',
-    backgroundColor: '#eee',
-    elevation: 3,
+    width: 70,
+    height: 70,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    elevation: 10,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
     overflow: 'hidden',
   },
   smokeContainer: {
     position: 'absolute',
-    bottom: 50,
+    bottom: 0,
     left: 0,
     right: 0,
-    height: SCREEN_HEIGHT,
+    top: 0,
     alignItems: 'center',
     justifyContent: 'flex-end',
+    overflow: 'hidden',
+    zIndex: 100,
   },
   smokeImage: { width: '100%', height: '100%' },
 });

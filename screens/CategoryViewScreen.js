@@ -15,8 +15,11 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import * as Sharing from 'expo-sharing';
 import { NativeModules } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../contexts/ThemeContext';
+import { useDialog } from '../contexts/DialogContext';
+import { moveMediaToAppTrash } from '../services/trashService';
+
+
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
@@ -40,7 +43,7 @@ const MediaItem = React.memo(({ item, index, isSelected, onPress, onLongPress, c
         source={{ uri: item.uri }}
         style={styles.image}
         contentFit="cover"
-        transition={80}
+        transition={0}
       />
 
       {/* Light blue overlay when selected */}
@@ -65,8 +68,12 @@ const MediaItem = React.memo(({ item, index, isSelected, onPress, onLongPress, c
 });
 
 export default function CategoryViewScreen({ route, navigation }) {
+  const { categoryId, categoryTitle } = route.params;
   const { colors } = useTheme();
-  const { category, media } = route?.params || {};
+  const { showAlert, showConfirm, showCustomConfirm } = useDialog();
+  const { category, media: categoryItems } = route?.params || {};
+  const [dimensions, setDimensions] = useState({ width });
+
   const [loading, setLoading] = useState(false);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState(new Set());
@@ -108,11 +115,11 @@ export default function CategoryViewScreen({ route, navigation }) {
       // Normal behavior - open viewer
       navigation.navigate('Viewer', {
         item,
-        allItems: media,
+        allItems: categoryItems,
         initialIndex: index
       });
     }
-  }, [isSelectionMode, media, navigation]);
+  }, [isSelectionMode, categoryItems, navigation]);
 
   const exitSelectionMode = useCallback(() => {
     setIsSelectionMode(false);
@@ -125,16 +132,17 @@ export default function CategoryViewScreen({ route, navigation }) {
     try {
       shareInProgressRef.current = true;
       const selectedIds = Array.from(selectedItems);
-      const selectedMedia = media.filter(item => selectedIds.includes(item.id.toString()));
+      const selectedMedia = categoryItems.filter(item => selectedIds.includes(item.id.toString()));
 
       if (selectedMedia.length === 0) {
-        Alert.alert('Error', 'No items selected');
+        showAlert('Error', 'No items selected', null, 'error');
         return;
       }
 
+
       // Collect asset URIs for Android native sharing
       const uris = [];
-      for (const item of media) {
+      for (const item of categoryItems) {
         if (selectedItems.has(item.id.toString()) && !item.id.toString().startsWith('vault_')) {
           // Use item.uri which is already a valid content:// URI for MediaLibrary assets on Android
           if (item.uri) {
@@ -144,9 +152,10 @@ export default function CategoryViewScreen({ route, navigation }) {
       }
 
       if (uris.length === 0) {
-        Alert.alert('Error', 'No valid items to share');
+        showAlert('Error', 'No valid items to share', null, 'error');
         return;
       }
+
 
       console.log(`CategoryView: Sharing ${uris.length} items via NativeModules.MultiShare`);
 
@@ -165,103 +174,115 @@ export default function CategoryViewScreen({ route, navigation }) {
       const errorMsg = error.message || '';
       if (!errorMsg.includes('User did not share') && !errorMsg.includes('User cancelled')) {
         console.error('CategoryView: Share error:', errorMsg);
-        Alert.alert('Error', 'Failed to share items');
+        showAlert('Error', 'Failed to share items', null, 'error');
       }
+
     } finally {
       // Safely reset guard after a delay
       setTimeout(() => {
         shareInProgressRef.current = false;
       }, 1000);
     }
-  }, [selectedItems, media, exitSelectionMode]);
+  }, [selectedItems, categoryItems, exitSelectionMode]);
 
   const handleDeleteSelected = useCallback(async () => {
-    const selectedCount = selectedItems.size;
+    if (selectedItems.size === 0) return;
 
-    Alert.alert(
-      'Delete Photos',
-      `Are you sure you want to delete ${selectedCount} ${selectedCount === 1 ? 'photo' : 'photos'}?`,
+    const selectedIds = Array.from(selectedItems);
+    const selectedMedia = categoryItems.filter(item => selectedIds.includes(item.id.toString()));
+    const title = selectedItems.size > 1 ? `Delete ${selectedItems.size} items?` : "Delete photo?";
+
+    showCustomConfirm(
+      title,
+      "Choose how you want to delete these items.",
       [
-        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Trash',
+          style: 'default',
+          onPress: async () => {
+            try {
+              const mediaLibraryIds = selectedMedia
+                .filter(item => {
+                  const idStr = (item.id || '').toString();
+                  return idStr && 
+                    !idStr.startsWith('vault_') && 
+                    !idStr.startsWith('picked_') && 
+                    !idStr.startsWith('temp_');
+                })
+                .map(item => item.id.toString());
+
+              if (mediaLibraryIds.length > 0) {
+                // Copy to local trash before system delete to ensure we have a backup
+                for (const item of selectedMedia) {
+                  try {
+                    await moveMediaToAppTrash(item);
+                  } catch (e) {
+                    console.error('Failed to move to app trash:', item.id, e);
+                  }
+                }
+                
+                // Trigger system delete dialog
+                const success = await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                if (success) {
+                  // Update UI
+                  setCategoryItems(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                  exitSelectionMode();
+                  showAlert('Success', `${selectedIds.length} items moved to trash`, null, 'success');
+                }
+              } else {
+                // Non-medialibrary items (e.g. vault)
+                for (const item of selectedMedia) {
+                  await moveMediaToAppTrash(item);
+                }
+                setCategoryItems(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                exitSelectionMode();
+                showAlert('Success', `${selectedIds.length} items moved to trash`, null, 'success');
+              }
+            } catch (error) {
+              console.error('Trash error:', error);
+              showAlert('Error', 'Failed to move items to trash', null, 'error');
+            }
+          }
+        },
+        {
+          text: 'Permanently delete',
           style: 'destructive',
           onPress: async () => {
             try {
-              const selectedIds = Array.from(selectedItems);
-              const selectedMedia = media.filter(item => selectedIds.includes(item.id.toString()));
+              const mediaLibraryIds = selectedMedia
+                .filter(item => {
+                  const idStr = (item.id || '').toString();
+                  return idStr && 
+                    !idStr.startsWith('vault_') && 
+                    !idStr.startsWith('picked_') && 
+                    !idStr.startsWith('temp_');
+                })
+                .map(item => item.id.toString());
 
-              // Move to system trash (Android MediaStore)
-              const { moveToTrash, isTrashSupported } = require('../services/trashService');
-
-              const isSupported = await isTrashSupported();
-              if (isSupported) {
-                // Filter out vault items - they need special handling
-                const mediaLibraryItems = selectedMedia.filter(item =>
-                  item.id &&
-                  !item.id.toString().startsWith('vault_') &&
-                  !item.id.toString().startsWith('picked_') &&
-                  !item.id.toString().startsWith('temp_')
-                );
-
-                const vaultItems = selectedMedia.filter(item =>
-                  item.id && item.id.toString().startsWith('vault_')
-                );
-
-                // Move MediaLibrary items to system trash
-                if (mediaLibraryItems.length > 0) {
-                  const assetIds = mediaLibraryItems.map(item => item.id.toString());
-                  try {
-                    const result = await moveToTrash(assetIds);
-                    if (result.errors && result.errors.length > 0) {
-                      console.warn('Some items failed to move to trash:', result.errors);
-                    }
-                  } catch (error) {
-                    console.error('Error moving to trash:', error);
-                    Alert.alert('Error', error.message || 'Failed to move items to trash');
-                    return;
-                  }
-                }
-
-                // For vault items, we still use the old method (custom trash)
-                if (vaultItems.length > 0) {
-                  const trashData = await AsyncStorage.getItem('@gallery_trash');
-                  const trashItems = trashData ? JSON.parse(trashData) : [];
-
-                  vaultItems.forEach(item => {
-                    trashItems.push({
-                      ...item,
-                      deletedAt: Date.now(),
-                    });
-                  });
-
-                  await AsyncStorage.setItem('@gallery_trash', JSON.stringify(trashItems));
+              if (mediaLibraryIds.length > 0) {
+                const success = await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
+                if (success) {
+                  setCategoryItems(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                  exitSelectionMode();
                 }
               } else {
-                // Fallback: Permanently delete if trash not supported
-                const mediaLibraryIds = selectedMedia
-                  .filter(item => item.id && !item.id.toString().startsWith('vault_'))
-                  .map(item => item.id);
-
-                if (mediaLibraryIds.length > 0) {
-                  await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
-                }
+                setCategoryItems(prev => prev.filter(item => !selectedIds.includes(item.id.toString())));
+                exitSelectionMode();
               }
-
-              // Exit selection mode
-              exitSelectionMode();
-
-              // Navigate back since items are deleted
-              navigation.goBack();
             } catch (error) {
-              console.error('Error deleting selected items:', error);
-              Alert.alert('Error', 'Failed to delete items');
+              console.error('Permanent delete error:', error);
+              showAlert('Error', 'Failed to delete items permanently', null, 'error');
             }
-          },
+          }
         },
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        }
       ]
     );
-  }, [selectedItems, media, exitSelectionMode, navigation]);
+  }, [selectedItems, categoryItems, exitSelectionMode, showAlert, showCustomConfirm]);
+
 
   const renderItem = useCallback(({ item, index }) => {
     const itemId = item.id.toString();
@@ -282,6 +303,15 @@ export default function CategoryViewScreen({ route, navigation }) {
   const keyExtractor = useCallback((item, index) => {
     return item?.id?.toString() || `category-media-${index}`;
   }, []);
+
+  const getItemLayout = useCallback((data, index) => {
+    const size = getItemSize(dimensions.width);
+    return {
+      length: size + GAP,
+      offset: (size + GAP) * Math.floor(index / NUM_COLUMNS),
+      index,
+    };
+  }, [dimensions.width]);
 
   if (loading) {
     return (
@@ -345,14 +375,14 @@ export default function CategoryViewScreen({ route, navigation }) {
               {String(category?.name || 'Category')}
             </Text>
             <Text style={[styles.subtitle, { color: colors.searchPlaceholder }]}>
-              {media?.length || 0} {media?.length === 1 ? 'item' : 'items'}
+              {categoryItems?.length || 0} {categoryItems?.length === 1 ? 'item' : 'items'}
             </Text>
           </View>
           <View style={styles.placeholder} />
         </View>
       )}
 
-      {!media || media.length === 0 ? (
+      {categoryItems?.length === 0 && !loading ? (
         <View style={styles.emptyContainer}>
           <Ionicons name={category?.icon || 'images-outline'} size={64} color={colors.searchPlaceholder} />
           <Text style={[styles.emptyText, { color: colors.searchPlaceholder }]}>
@@ -361,17 +391,20 @@ export default function CategoryViewScreen({ route, navigation }) {
         </View>
       ) : (
         <FlatList
-          data={media}
+          key={`category-${dimensions.width}`}
+          data={categoryItems}
           keyExtractor={keyExtractor}
           numColumns={NUM_COLUMNS}
           renderItem={renderItem}
+          getItemLayout={getItemLayout}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.grid}
-          windowSize={5}
+          windowSize={3}
           removeClippedSubviews={true}
-          maxToRenderPerBatch={10}
-          updateCellsBatchingPeriod={50}
-          initialNumToRender={15}
+          maxToRenderPerBatch={NUM_COLUMNS * 2}
+          updateCellsBatchingPeriod={30}
+          initialNumToRender={NUM_COLUMNS * 6}
+          ListFooterComponent={loading ? <ActivityIndicator size="small" color="#007AFF" style={{ padding: 20 }} /> : null}
         />
       )}
     </SafeAreaView>

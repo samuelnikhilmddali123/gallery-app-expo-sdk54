@@ -7,6 +7,8 @@ import * as Location from 'expo-location';
 import Svg, { Path } from 'react-native-svg';
 import AnimatedWeatherIcon from '../components/AnimatedWeatherIcon';
 import AnimatedWeatherBackground from '../components/AnimatedWeatherBackground';
+import * as Haptics from 'expo-haptics';
+
 
 const { width } = Dimensions.get('window');
 const API_KEY = process.env.EXPO_PUBLIC_WEATHER_API_KEY || ('bd5e378' + '503939ddaee' + '76f12ad7a97608');
@@ -124,7 +126,14 @@ export default function WeatherScreen() {
             {/* Top Section */}
             <SafeAreaView edges={['top']} style={styles.topSection}>
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
+                    <TouchableOpacity 
+                        onPress={() => {
+                            Haptics.selectionAsync();
+                            navigation.goBack();
+                        }} 
+                        style={styles.iconBtn}
+                    >
+
                         <Ionicons name="bar-chart-outline" size={24} color="#ACB6D6" style={{ transform: [{rotate: '90deg'}] }} />
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.iconBtn}>
@@ -181,13 +190,26 @@ export default function WeatherScreen() {
                 {/* Bottom Toggle Slider */}
                 <View style={styles.toggleWrapper}>
                     <View style={styles.toggleContainer}>
-                        <TouchableOpacity style={styles.toggleBtn} onPress={() => setTab('DAY')}>
+                        <TouchableOpacity 
+                            style={styles.toggleBtn} 
+                            onPress={() => {
+                                Haptics.selectionAsync();
+                                setTab('DAY');
+                            }}
+                        >
                             <Text style={[styles.toggleText, tab === 'DAY' && styles.toggleTextActive]}>DAY</Text>
                         </TouchableOpacity>
                         <View style={styles.toggleSeparator} />
-                        <TouchableOpacity style={styles.toggleBtn} onPress={() => setTab('WEEK')}>
+                        <TouchableOpacity 
+                            style={styles.toggleBtn} 
+                            onPress={() => {
+                                Haptics.selectionAsync();
+                                setTab('WEEK');
+                            }}
+                        >
                             <Text style={[styles.toggleText, tab === 'WEEK' && styles.toggleTextActive]}>WEEK</Text>
                         </TouchableOpacity>
+
                     </View>
                     {/* Active Pill Indicator */}
                     <View style={[styles.activePill, tab === 'WEEK' && { right: 5, left: undefined }]} />

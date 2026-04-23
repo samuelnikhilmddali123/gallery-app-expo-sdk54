@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+
+
 import { useTheme } from '../contexts/ThemeContext';
 
 export default function AlbumsScreen({ navigation }) {
@@ -108,13 +111,19 @@ export default function AlbumsScreen({ navigation }) {
     }
   };
 
+  const handleLongPress = useCallback((item) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // Logic for long press actions
+  }, []);
+
   const renderAlbumItem = ({ item }) => (
     <TouchableOpacity
       style={[styles.albumItem, { backgroundColor: colors.itemBackground }]}
       onPress={() => {
-        // Navigate to AlbumViewScreen to show media from this album
+        Haptics.selectionAsync();
         navigation.navigate('AlbumView', { album: item });
       }}
+      onLongPress={() => handleLongPress(item)}
       activeOpacity={0.7}
     >
       {item.coverUri ? (

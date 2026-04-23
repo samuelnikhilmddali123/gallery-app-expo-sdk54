@@ -12,14 +12,17 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
+import { useDialog } from '../contexts/DialogContext';
+
 
 export default function ForgotVaultPasswordScreen({ onComplete, onCancel }) {
   const { colors } = useTheme();
   const { verifySecurityQuestions, resetVault, getSecurityQuestions } = useVault();
+  const { showAlert } = useDialog();
   const navigation = useNavigation();
+
 
   const [step, setStep] = useState(0); // 0 = verify answers, 1 = reset password
   const [answers, setAnswers] = useState(['', '', '']);
@@ -46,53 +49,52 @@ export default function ForgotVaultPasswordScreen({ onComplete, onCancel }) {
 
   const verifyAnswers = async () => {
     if (answers.some(a => !a.trim())) {
-      Alert.alert('Error', 'Please answer all security questions');
+      showAlert('Error', 'Please answer all security questions', null, 'error');
       return;
     }
+
 
     const valid = await verifySecurityQuestions(answers);
     if (valid) {
       setStep(1);
     } else {
-      Alert.alert('Error', 'Incorrect answers. Try again.');
+      showAlert('Error', 'Incorrect answers. Try again.', null, 'error');
       setAnswers(['', '', '']);
     }
+
   };
 
   const resetPassword = async () => {
     if (!newPassword || newPassword.length < 4) {
-      Alert.alert('Error', 'Password must be at least 4 characters');
+      showAlert('Error', 'Password must be at least 4 characters', null, 'error');
       return;
     }
 
     if (newPassword !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match');
+      showAlert('Error', 'Passwords do not match', null, 'error');
       return;
     }
 
     const qs = getSecurityQuestions();
     if (!qs) {
-      Alert.alert('Error', 'Unable to retrieve security questions');
+      showAlert('Error', 'Unable to retrieve security questions', null, 'error');
       return;
     }
 
+
     const success = await resetVault(newPassword, qs);
     if (success) {
-      Alert.alert('Success', 'Password reset successfully', [
-        {
-          text: 'OK',
-          onPress: () => {
-            if (onComplete) {
-              onComplete();
-            } else {
-              navigation.goBack();
-            }
-          }
-        },
-      ]);
+      showAlert('Success', 'Password reset successfully', () => {
+        if (onComplete) {
+          onComplete();
+        } else {
+          navigation.goBack();
+        }
+      }, 'success');
     } else {
-      Alert.alert('Error', 'Failed to reset password');
+      showAlert('Error', 'Failed to reset password', null, 'error');
     }
+
   };
 
   return (

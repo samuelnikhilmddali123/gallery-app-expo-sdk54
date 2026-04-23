@@ -14,12 +14,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+
 
 import { useTheme } from '../contexts/ThemeContext';
-import { useVault } from '../contexts/VaultContext';
-import { getVaultMedia, removeMediaFromVault, ensureVaultDirectory } from '../services/vaultService';
 import { moveMediaToVault } from '../services/mediaService';
 import VaultPasswordScreen from './VaultPasswordScreen';
+import { useDialog } from '../contexts/DialogContext';
+
 
 const { width } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
@@ -29,10 +31,12 @@ const ITEM_SIZE = (width - GAP * (NUM_COLUMNS + 1)) / NUM_COLUMNS;
 export default function VaultScreen({ navigation, onLock }) {
   const { colors } = useTheme();
   const { lockVault, isVaultUnlocked, unlockVault, verifyPassword } = useVault();
+  const { showAlert } = useDialog();
   const [vaultMedia, setVaultMedia] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showPasswordScreen, setShowPasswordScreen] = useState(false);
+
   const appState = useRef(AppState.currentState);
 
   // Lock vault when app goes to background
@@ -70,8 +74,9 @@ export default function VaultScreen({ navigation, onLock }) {
       setVaultMedia(media);
     } catch (error) {
       console.error('Error loading vault media:', error);
-      Alert.alert('Error', 'Failed to load vault media');
+      showAlert('Error', 'Failed to load vault media', null, 'error');
     } finally {
+
       setLoading(false);
       setRefreshing(false);
     }
@@ -100,10 +105,13 @@ export default function VaultScreen({ navigation, onLock }) {
     // Directly remove without confirmation
     const success = await removeMediaFromVault(item.id);
     if (success) {
+      // Success feedback for removal
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       loadVaultMedia();
     } else {
-      Alert.alert('Error', 'Failed to remove item from vault');
+      showAlert('Error', 'Failed to remove item from vault', null, 'error');
     }
+
   };
 
 
@@ -147,10 +155,14 @@ export default function VaultScreen({ navigation, onLock }) {
     return (
       <VaultPasswordScreen
         onUnlock={() => {
+          // Success feedback for unlock
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
           unlockVault();
           setShowPasswordScreen(false);
           loadVaultMedia();
         }}
+
       />
     );
   }
@@ -174,10 +186,12 @@ export default function VaultScreen({ navigation, onLock }) {
         <View style={[styles.header, { borderBottomColor: colors.border }]}>
           <TouchableOpacity
             onPress={() => {
+              Haptics.selectionAsync();
               lockVault();
               if (onLock) onLock();
               navigation.goBack();
             }}
+
             style={styles.backButton}
           >
             <Ionicons name="arrow-back" size={24} color={colors.icon} />
@@ -207,8 +221,12 @@ export default function VaultScreen({ navigation, onLock }) {
 
         <TouchableOpacity
           style={[styles.addButton, { backgroundColor: '#007AFF' }]}
-          onPress={() => navigation.navigate('MainTabs', { screen: 'Home', params: { selectionPurpose: 'vaultAdd' } })}
+          onPress={() => {
+            Haptics.selectionAsync();
+            navigation.navigate('MainTabs', { screen: 'Home', params: { selectionPurpose: 'vaultAdd' } });
+          }}
           activeOpacity={0.8}
+
         >
           <Ionicons name="add" size={28} color="#fff" />
         </TouchableOpacity>

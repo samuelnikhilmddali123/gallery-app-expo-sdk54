@@ -357,7 +357,7 @@ function ZoomableImage({
               source={source}
               style={{ width: '100%', height: '100%' }}
               contentFit={contentFit}
-              transition={200}
+              transition={0}
               cachePolicy="memory-disk"
               recyclingKey={recyclingKey}
               onLoad={(e) => {
@@ -371,7 +371,7 @@ function ZoomableImage({
               onError={() => setHasError(true)}
               enableLiveTextInteraction={false}
               allowDownscaling={true}
-              preferHighDynamicRange
+
             />
           </Animated.View>
         </View>

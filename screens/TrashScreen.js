@@ -10,6 +10,10 @@ import { useTheme } from '../contexts/ThemeContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getTrashItems, restoreFromTrash, deletePermanently, isTrashSupported } from '../services/trashService';
 import { restoreMediaToVault } from '../services/vaultService';
+import * as Haptics from 'expo-haptics';
+import { useDialog } from '../contexts/DialogContext';
+
+
 
 const TRASH_KEY = '@gallery_trash'; // For vault items only
 
@@ -181,7 +185,9 @@ const getDaysAgo = (timestamp) => {
 
 export default function TrashScreen({ navigation }) {
   const { colors } = useTheme();
+  const { showConfirm, showCustomConfirm, showAlert } = useDialog();
   const [trashItems, setTrashItems] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState(new Set());
@@ -221,13 +227,14 @@ export default function TrashScreen({ navigation }) {
         fileCount = files.length;
       }
 
-      Alert.alert(
+      showAlert(
         'Diagnostics',
         `DB Items: ${dbCount}\nFiles on Disk: ${fileCount}\nRaw Data: ${trashData ? trashData.substring(0, 100) : 'null'}...`
       );
     } catch (e) {
-      Alert.alert('Diag Error', e.message);
+      showAlert('Diag Error', e.message, null, 'error');
     }
+
   };
 
   const loadTrash = async () => {
@@ -294,9 +301,13 @@ export default function TrashScreen({ navigation }) {
 
   const handleLongPress = useCallback((item) => {
     if (!isSelectionMode) {
+      // Impact feedback for long press
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
       setIsSelectionMode(true);
       setSelectedItems(new Set([item.id.toString()]));
     }
+
   }, [isSelectionMode]);
 
   const handleItemPress = useCallback((item, index) => {
@@ -312,8 +323,11 @@ export default function TrashScreen({ navigation }) {
             setIsSelectionMode(false);
           }
         } else {
+          // Subtle feedback for selection
+          Haptics.selectionAsync();
           newSet.add(itemId);
         }
+
         return newSet;
       });
     } else {
@@ -327,9 +341,13 @@ export default function TrashScreen({ navigation }) {
   }, [isSelectionMode, trashItems, navigation]);
 
   const exitSelectionMode = useCallback(() => {
+    // Subtle feedback for exiting selection mode
+    Haptics.selectionAsync();
+
     setIsSelectionMode(false);
     setSelectedItems(new Set());
   }, []);
+
 
   const restoreItem = async (item) => {
     try {
@@ -339,7 +357,7 @@ export default function TrashScreen({ navigation }) {
       if (isVaultItem) {
         // Restore vault item using service
         await restoreMediaToVault(item);
-        Alert.alert('Success', 'Item restored to Vault');
+        showAlert('Success', 'Item restored to Vault', null, 'success');
       } else if (isAppTrashItem) {
         // Restore app trash item - save back to gallery, then delete trash copy
         if (item.filePath) {
@@ -354,29 +372,33 @@ export default function TrashScreen({ navigation }) {
           const updatedTrash = trashItems.filter(t => t.id !== item.id);
           await AsyncStorage.setItem(TRASH_KEY, JSON.stringify(updatedTrash));
         }
-        Alert.alert('Success', 'Item restored');
+        showAlert('Success', 'Item restored', null, 'success');
       } else if (Platform.OS === 'android' && trashSupported) {
         // Restore from system trash
         const result = await restoreFromTrash([item.id.toString()]);
         if (result.successCount > 0) {
-          Alert.alert('Success', 'Item restored');
+          // Success feedback for restore
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          showAlert('Success', 'Item restored', null, 'success');
         } else {
-          Alert.alert('Error', result.errors?.[0] || 'Failed to restore item');
+          showAlert('Error', result.errors?.[0] || 'Failed to restore item', null, 'error');
         }
       }
+
 
       loadTrash();
     } catch (error) {
       console.error('Error restoring item:', error);
-      Alert.alert('Error', error.message || 'Failed to restore item');
+      showAlert('Error', error.message || 'Failed to restore item', null, 'error');
     }
+
   };
 
   const restoreSelected = useCallback(async () => {
     const selectedCount = selectedItems.size;
     if (selectedCount === 0) return;
 
-    Alert.alert(
+    showCustomConfirm(
       'Restore Items',
       `Restore ${selectedCount} ${selectedCount === 1 ? 'item' : 'items'} from trash?`,
       [
@@ -432,22 +454,28 @@ export default function TrashScreen({ navigation }) {
                   console.warn('Some items failed to restore:', result.errors);
                 }
               }
+              
+              // Success feedback for mass restore
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
               exitSelectionMode();
-              Alert.alert('Success', `${selectedCount} ${selectedCount === 1 ? 'item' : 'items'} restored`);
+              showAlert('Success', `${selectedCount} ${selectedCount === 1 ? 'item' : 'items'} restored`, null, 'success');
               loadTrash();
+
             } catch (error) {
               console.error('Error restoring selected items:', error);
-              Alert.alert('Error', error.message || 'Failed to restore items');
+              showAlert('Error', error.message || 'Failed to restore items', null, 'error');
             }
           },
         },
-      ]
+      ],
+      'info'
     );
+
   }, [selectedItems, trashItems, trashSupported, exitSelectionMode]);
 
   const deletePermanentlyItem = async (item) => {
-    Alert.alert(
+    showCustomConfirm(
       'Delete Permanently',
       'Are you sure you want to permanently delete this item? This cannot be undone.',
       [
@@ -484,27 +512,30 @@ export default function TrashScreen({ navigation }) {
                 // Permanently delete from system trash
                 const result = await deletePermanently([item.id.toString()]);
                 if (result.errors && result.errors.length > 0) {
-                  Alert.alert('Error', result.errors[0] || 'Failed to delete item');
+                  showAlert('Error', result.errors[0] || 'Failed to delete item', null, 'error');
                   return;
                 }
               }
 
               loadTrash();
+              showAlert('Success', 'Item deleted permanently', null, 'success');
             } catch (error) {
               console.error('Error deleting permanently:', error);
-              Alert.alert('Error', error.message || 'Failed to delete item');
+              showAlert('Error', error.message || 'Failed to delete item', null, 'error');
             }
           },
         },
-      ]
+      ],
+      'warning'
     );
+
   };
 
   const deleteSelectedPermanently = useCallback(async () => {
     const selectedCount = selectedItems.size;
     if (selectedCount === 0) return;
 
-    Alert.alert(
+    showCustomConfirm(
       'Delete Permanently',
       `Are you sure you want to permanently delete ${selectedCount} ${selectedCount === 1 ? 'item' : 'items'}? This cannot be undone.`,
       [
@@ -559,22 +590,24 @@ export default function TrashScreen({ navigation }) {
               }
 
               exitSelectionMode();
-              Alert.alert('Success', `${selectedCount} ${selectedCount === 1 ? 'item' : 'items'} deleted permanently`);
+              showAlert('Success', `${selectedCount} ${selectedCount === 1 ? 'item' : 'items'} deleted permanently`, null, 'success');
               loadTrash();
             } catch (error) {
               console.error('Error deleting selected items:', error);
-              Alert.alert('Error', error.message || 'Failed to delete items');
+              showAlert('Error', error.message || 'Failed to delete items', null, 'error');
             }
           },
         },
-      ]
+      ],
+      'warning'
     );
+
   }, [selectedItems, trashItems, trashSupported, exitSelectionMode]);
 
   const emptyTrash = useCallback(async () => {
     if (trashItems.length === 0) return;
 
-    Alert.alert(
+    showCustomConfirm(
       'Empty Trash',
       `Are you sure you want to permanently delete all ${trashItems.length} ${trashItems.length === 1 ? 'item' : 'items'}? This cannot be undone.`,
       [
@@ -615,16 +648,18 @@ export default function TrashScreen({ navigation }) {
                 await deletePermanently(assetIds);
               }
 
-              Alert.alert('Success', 'Trash emptied');
+              showAlert('Success', 'Trash emptied', null, 'success');
               loadTrash();
             } catch (error) {
               console.error('Error emptying trash:', error);
-              Alert.alert('Error', error.message || 'Failed to empty trash');
+              showAlert('Error', error.message || 'Failed to empty trash', null, 'error');
             }
           },
         },
-      ]
+      ],
+      'warning'
     );
+
   }, [trashItems, trashSupported]);
 
   const renderItem = useCallback(({ item, index }) => {

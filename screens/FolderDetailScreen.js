@@ -31,7 +31,7 @@ const getItemSize = (screenWidth) => (screenWidth - (GAP * (COLUMN_COUNT - 1))) 
 export default function FolderDetailScreen({ navigation, route }) {
     const { folderId, folderName } = route.params;
     const { colors } = useTheme();
-    const { showCustomConfirm, showAlert } = useDialog();
+    const { showConfirm, showCustomConfirm, showAlert } = useDialog();
     const [media, setMedia] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -52,8 +52,9 @@ export default function FolderDetailScreen({ navigation, route }) {
             setMedia(data);
         } catch (error) {
             console.error('Failed to load folder media', error);
-            Alert.alert('Error', 'Failed to load photos');
+            showAlert('Error', 'Failed to load photos', null, 'error');
         } finally {
+
             setLoading(false);
         }
     }, [folderId]);
@@ -76,33 +77,31 @@ export default function FolderDetailScreen({ navigation, route }) {
     };
 
     const deleteThisFolder = () => {
-        Alert.alert(
+        showConfirm(
             'Delete Folder',
             'Are you sure you want to delete this folder? Photos will not be deleted from your device.',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Delete',
-                    style: 'destructive',
-                    onPress: async () => {
-                        try {
-                            await deleteFolder(folderId);
-                            navigation.goBack();
-                        } catch (e) {
-                            Alert.alert('Error', 'Failed to delete folder');
-                        }
-                    }
+            async () => {
+                try {
+                    await deleteFolder(folderId);
+                    navigation.goBack();
+                    showAlert('Success', 'Folder deleted', null, 'success');
+                } catch (e) {
+                    showAlert('Error', 'Failed to delete folder', null, 'error');
                 }
-            ]
+            },
+            null,
+            true,
+            'warning'
         );
     };
+
 
     const handleRemoveSelected = async () => {
         const itemsToRemove = Array.from(selectedItems);
         if (itemsToRemove.length === 0) return;
 
         showCustomConfirm(
-            `Action for ${itemsToRemove.length} items`,
+            `Actions for ${itemsToRemove.length} items`,
             "Choose how you want to proceed.",
             [
                 {
@@ -114,6 +113,7 @@ export default function FolderDetailScreen({ navigation, route }) {
                             setSelectedItems(new Set());
                             setIsSelectionMode(false);
                             loadMedia();
+                            showAlert('Success', 'Removed from folder', null, 'success');
                         } catch (e) {
                             showAlert('Error', 'Failed to remove items');
                         }
@@ -123,48 +123,40 @@ export default function FolderDetailScreen({ navigation, route }) {
                     text: 'Trash',
                     style: 'default',
                     onPress: async () => {
-                        const successfulIds = [];
-                        const failedItems = [];
-                        const mediaLibraryIds = [];
-
                         try {
                             setLoading(true);
                             const selectedMedia = media.filter(m => itemsToRemove.includes(m.id));
-
+                            
+                            // 1. Move to app trash (copy + backup)
                             for (const item of selectedMedia) {
                                 try {
-                                    const result = await moveMediaToAppTrash(item);
-                                    if (result) {
-                                        successfulIds.push(item.id);
-                                        if (item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_')) {
-                                            mediaLibraryIds.push(item.id);
-                                        }
-                                    }
-                                } catch (err) {
-                                    failedItems.push(item);
+                                    await moveMediaToAppTrash(item);
+                                } catch (e) {
+                                    console.error('FolderDetail: Trash copy failed', e);
                                 }
                             }
+
+                            const mediaLibraryIds = selectedMedia
+                                .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
+                                .map(item => item.id.toString());
 
                             if (mediaLibraryIds.length > 0) {
                                 const { status } = await MediaLibrary.requestPermissionsAsync();
                                 if (status === 'granted') {
+                                    // 2. Trigger native delete
                                     await MediaLibrary.deleteAssetsAsync(mediaLibraryIds);
                                 }
                             }
-
-                            if (successfulIds.length > 0) {
-                                await removeMediaFromFolder(folderId, successfulIds);
-                            }
-
+                            
+                            // 3. Remove from folder records
+                            await removeMediaFromFolder(folderId, itemsToRemove);
+                            
                             setSelectedItems(new Set());
                             setIsSelectionMode(false);
                             loadMedia();
-
-                            if (failedItems.length > 0) {
-                                showAlert('Incomplete', `${failedItems.length} items could not be moved to trash.`);
-                            }
+                            showAlert('Success', 'Items moved to trash', null, 'success');
                         } catch (e) {
-                            showAlert('Error', 'Failed to perform trash operation');
+                            showAlert('Error', 'Failed to move to trash');
                         } finally {
                             setLoading(false);
                         }
@@ -179,7 +171,7 @@ export default function FolderDetailScreen({ navigation, route }) {
                             const selectedMedia = media.filter(m => itemsToRemove.includes(m.id));
                             const mediaLibraryIds = selectedMedia
                                 .filter(item => item.id && !item.id.toString().startsWith('vault_') && !item.id.toString().startsWith('picked_'))
-                                .map(item => item.id);
+                                .map(item => item.id.toString());
 
                             if (mediaLibraryIds.length > 0) {
                                 const { status } = await MediaLibrary.requestPermissionsAsync();
@@ -205,14 +197,14 @@ export default function FolderDetailScreen({ navigation, route }) {
                 },
                 {
                     text: 'Cancel',
-                    style: 'cancel',
-                    onPress: () => { }
+                    style: 'cancel'
                 }
             ]
         );
     };
 
     const renderItem = ({ item }) => {
+
         const isSelected = selectedItems.has(item.id);
         const itemSize = getItemSize(dimensions.width);
 

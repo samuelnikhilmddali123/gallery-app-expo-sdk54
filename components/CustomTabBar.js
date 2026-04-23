@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle, 
@@ -68,6 +70,9 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
             const isFocused = state.index === index;
 
             const onPress = () => {
+              // Trigger haptic feedback
+              Haptics.selectionAsync();
+
               const event = navigation.emit({
                 type: 'tabPress',
                 target: route.key,
@@ -78,6 +83,7 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
                 navigation.navigate(route.name);
               }
             };
+
 
             let iconName;
             if (route.name === 'Home') iconName = isFocused ? 'home' : 'home-outline';
@@ -107,20 +113,20 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
 const styles = StyleSheet.create({
   floatingContainer: {
     position: 'absolute',
-    bottom: 18,
+    bottom: 24,
     alignSelf: 'center',
-    width: '40%',
-    height: 60,
-    borderRadius: 30,
+    width: '45%',
+    height: 64,
+    borderRadius: 32,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
-    elevation: 10,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    elevation: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
     zIndex: 999,
   },
   blurWrapper: {
@@ -130,19 +136,20 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 4,
   },
   bubble: {
     position: 'absolute',
     width: BUBBLE_SIZE,
     height: BUBBLE_SIZE,
     borderRadius: BUBBLE_SIZE / 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.35)',
-    shadowColor: '#FFFFFF',
+    backgroundColor: 'rgba(123, 97, 255, 0.15)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(123, 97, 255, 0.4)',
+    shadowColor: '#7B61FF',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
+    shadowOpacity: 0.8,
+    shadowRadius: 15,
   },
   tabButton: {
     flex: 1,

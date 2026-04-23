@@ -12,6 +12,8 @@ import {
   BackHandler,
   ActivityIndicator,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -44,6 +46,7 @@ export default function VaultPasswordScreen({ route, onUnlock }) {
   }, [navigation]);
 
   const handleBackPress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // Navigate back (to Settings or previous screen)
     if (navigation) {
       if (navigation.canGoBack()) {
@@ -69,6 +72,7 @@ export default function VaultPasswordScreen({ route, onUnlock }) {
 
       if (valid) {
         // Success - unlock the vault
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         if (unlockCallback) {
           unlockCallback();
         } else {
@@ -76,6 +80,7 @@ export default function VaultPasswordScreen({ route, onUnlock }) {
           unlockVault();
           navigation.replace('VaultHome');
         }
+
         setPassword('');
         setAttempts(0);
       } else {
