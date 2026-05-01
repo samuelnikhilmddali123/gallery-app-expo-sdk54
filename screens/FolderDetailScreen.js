@@ -67,7 +67,7 @@ export default function FolderDetailScreen({ navigation, route }) {
     const handleAddPhotos = () => {
         // Navigate to Photos tab with selection mode parameters
         navigation.navigate('MainTabs', {
-            screen: 'Photos',
+            screen: 'Home',
             params: {
                 selectionPurpose: 'folderAdd',
                 targetFolderId: folderId,

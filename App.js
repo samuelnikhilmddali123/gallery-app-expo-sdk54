@@ -1,3 +1,6 @@
+import { Buffer } from 'buffer';
+global.Buffer = global.Buffer || Buffer;
+
 import 'react-native-gesture-handler';
 import React from 'react';
 import { View, ActivityIndicator } from 'react-native';
@@ -28,7 +31,6 @@ import TrashScreen from './screens/TrashScreen';
 import VaultScreen from './screens/VaultScreen';
 import VaultSetupScreen from './screens/VaultSetupScreen';
 import ForgotVaultPasswordScreen from './screens/ForgotVaultPasswordScreen';
-import ProfileScreen from './screens/ProfileScreen';
 import CalendarScreen from './screens/CalendarScreen';
 import SmartAlbumsScreen from './screens/SmartAlbumsScreen';
 import WeatherScreen from './screens/WeatherScreen';
@@ -48,7 +50,8 @@ function MainTabs() {
       }}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Profile" component={ProfileScreen} />
+      <Tab.Screen name="Albums" component={AlbumsScreen} />
+      <Tab.Screen name="Weather" component={WeatherScreen} />
     </Tab.Navigator>
   );
 }

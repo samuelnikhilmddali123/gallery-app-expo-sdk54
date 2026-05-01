@@ -20,7 +20,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
 import VaultScreen from './VaultScreen';
-import ProfileScreen from './ProfileScreen';
 import VaultSetupScreen from './VaultSetupScreen';
 import ForgotVaultPasswordScreen from './ForgotVaultPasswordScreen';
 
@@ -41,7 +40,6 @@ export default function SettingsScreen({ navigation }) {
    * const [showVault, setShowVault] = useState(false);
    * replaced with clean navigation logic
    */
-  const [showProfile, setShowProfile] = useState(false);
   const [showVaultSetup, setShowVaultSetup] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -189,13 +187,6 @@ export default function SettingsScreen({ navigation }) {
     {
       title: 'Account',
       items: [
-        {
-          id: 'profile',
-          title: 'Profile',
-          icon: 'person-outline',
-          type: 'navigation',
-          onPress: () => setShowProfile(true),
-        },
         {
           id: 'about',
           title: 'About',
@@ -437,17 +428,6 @@ export default function SettingsScreen({ navigation }) {
       </Modal>
     );
   };
-
-  if (showProfile) {
-    return (
-      <ProfileScreen
-        navigation={{
-          ...navigation,
-          goBack: () => setShowProfile(false),
-        }}
-      />
-    );
-  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>

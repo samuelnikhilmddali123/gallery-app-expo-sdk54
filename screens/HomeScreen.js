@@ -37,6 +37,7 @@ import * as Haptics from 'expo-haptics';
 
 import DropdownMenu from '../components/DropdownMenu';
 import SideSettingsPanel from '../components/SideSettingsPanel';
+import WeatherMiniIcon from '../components/WeatherMiniIcon';
 import { useDialog } from '../contexts/DialogContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
@@ -164,7 +165,7 @@ const MediaItem = React.memo(({ item, index, isSelected, isDeleting, deletionTyp
 
 export default function HomeScreen({ navigation, route }) {
   // Theme & Context
-  const { colors, weatherInfo, weatherMode } = useTheme();
+  const { colors, weatherInfo, weatherMode, isDarkMode } = useTheme();
   const { isVaultSetup, verifyPassword, unlockVault } = useVault();
   const { showCustomConfirm, showAlert } = useDialog();
 
@@ -348,6 +349,22 @@ export default function HomeScreen({ navigation, route }) {
     return () => clearTimeout(timeout);
   }, [searchQuery, isVaultSetup, verifyPassword, unlockVault, navigation]);
 
+  // Handle incoming selection purpose (from Vault or Folders)
+  useEffect(() => {
+    if (route.params?.selectionPurpose) {
+      setIsSelectionMode(true);
+      setSelectionPurpose(route.params.selectionPurpose);
+      
+      if (route.params.targetFolderId) {
+        setTargetFolderId(route.params.targetFolderId);
+        setTargetFolderName(route.params.targetFolderName);
+      }
+      
+      // Clear params to avoid re-triggering on re-focus
+      navigation.setParams({ selectionPurpose: undefined });
+    }
+  }, [route.params?.selectionPurpose, navigation]);
+
   /**
    * 🔍 Search Filtering Logic
    */
@@ -499,6 +516,20 @@ export default function HomeScreen({ navigation, route }) {
     } catch (e) { console.error(e); }
   }, [selectedItems, activeMedia, exitSelectionMode]);
 
+  const handleFolderAddConfirm = useCallback(async () => {
+    if (!targetFolderId) return;
+    const items = activeMedia.filter(m => selectedItems.has(m.id.toString()));
+    try {
+      await addMediaToFolder(targetFolderId, items);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      exitSelectionMode();
+      showAlert('Success', `Added ${items.length} items to ${targetFolderName || 'folder'}`);
+    } catch (e) {
+      console.error(e);
+      showAlert('Error', 'Failed to add items to folder');
+    }
+  }, [selectedItems, activeMedia, targetFolderId, targetFolderName, exitSelectionMode, showAlert]);
+
   /**
    * 🖼️ Rendering Components
    */
@@ -604,10 +635,24 @@ export default function HomeScreen({ navigation, route }) {
           {isSelectionMode ? (
             <View style={[styles.selectionHeader, { backgroundColor: colors.itemBackground }]}>
               <TouchableOpacity onPress={exitSelectionMode} style={{ padding: 8 }}><Text style={{ color: colors.text, fontWeight: '600' }}>Cancel</Text></TouchableOpacity>
-              <Text style={[styles.title, { color: colors.text }]}>{selectedItems.size} selected</Text>
+              <Text style={[styles.title, { color: colors.text }]}>
+                {selectionPurpose === 'vaultAdd' ? 'Add to Vault' : 
+                 selectionPurpose === 'folderAdd' ? `Add to ${targetFolderName || 'Folder'}` :
+                 selectedItems.size > 0 ? `${selectedItems.size} selected` : 'Select items'}
+              </Text>
               <View style={styles.selectionActions}>
                 {selectionPurpose ? (
-                  <TouchableOpacity onPress={selectionPurpose === 'vaultAdd' ? handleVaultAddConfirm : exitSelectionMode} style={{ padding: 4 }}><Ionicons name="checkmark-circle" size={32} color="#007AFF" /></TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={selectionPurpose === 'vaultAdd' ? handleVaultAddConfirm : handleFolderAddConfirm} 
+                    style={{ padding: 4 }}
+                    disabled={selectedItems.size === 0}
+                  >
+                    <Ionicons 
+                      name="checkmark-circle" 
+                      size={32} 
+                      color={selectedItems.size > 0 ? "#007AFF" : colors.searchPlaceholder} 
+                    />
+                  </TouchableOpacity>
                 ) : (
                   <>
                     <TouchableOpacity onPress={handleShareSelected} style={{ padding: 4 }}><Ionicons name="share-outline" size={24} color={colors.icon} /></TouchableOpacity>
@@ -623,9 +668,12 @@ export default function HomeScreen({ navigation, route }) {
                 <TextInput value={searchQuery} onChangeText={setSearchQuery} placeholder="name, people, places" placeholderTextColor={colors.searchPlaceholder} style={[styles.searchInput, { color: colors.searchText }]} autoCapitalize="none" />
                 {searchQuery.length > 0 && <TouchableOpacity onPress={() => setSearchQuery('')}><Ionicons name="close-circle" size={16} color={colors.searchPlaceholder} /></TouchableOpacity>}
                 {weatherMode && weatherInfo && (
-                   <TouchableOpacity onPress={() => navigation.navigate('Weather')} style={styles.weather}>
-                     <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>{weatherInfo.temperature}°</Text>
-                     <Text style={{ fontSize: 14 }}>{weatherInfo.emoji}</Text>
+                   <TouchableOpacity 
+                    onPress={() => navigation.navigate('Weather')} 
+                    style={[styles.weatherContainer, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' }]}
+                   >
+                     <Text style={[styles.tempText, { color: colors.text }]}>{weatherInfo.temperature}°</Text>
+                     <WeatherMiniIcon iconId={weatherInfo.iconId} size={18} />
                    </TouchableOpacity>
                 )}
               </View>
@@ -646,7 +694,21 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, gap: 12 },
   searchBar: { flexDirection: 'row', alignItems: 'center', flex: 1, paddingHorizontal: 12, height: 40, borderRadius: 20, gap: 8 },
   searchInput: { flex: 1, fontSize: 15, height: '100%' },
-  weather: { flexDirection: 'row', alignItems: 'center', borderLeftWidth: 1, borderLeftColor: 'rgba(150,150,150,0.3)', paddingLeft: 8, gap: 3 },
+  weatherContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 14,
+    marginLeft: 8,
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.08)'
+  },
+  tempText: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginRight: 4,
+  },
   grid: { padding: GAP / 2, paddingBottom: 100 },
   item: { width: ITEM_SIZE, height: ITEM_SIZE, margin: GAP / 2, borderRadius: 16, overflow: 'hidden', backgroundColor: 'rgba(150,150,150,0.1)' },
   mediaImage: { width: '100%', height: '100%' },

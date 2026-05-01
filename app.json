@@ -2,6 +2,7 @@
   "expo": {
     "name": "Gallery",
     "slug": "gallery-app",
+    "scheme": "gallery-app",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -45,8 +46,14 @@
       "favicon": "./assets/icon.png"
     },
     "plugins": [
-      "expo-media-library",
-      "expo-asset",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Gallery to access your photos.",
+          "savePhotosPermission": "Allow Gallery to save photos to your library.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
       "expo-secure-store",
       "expo-video",
       [

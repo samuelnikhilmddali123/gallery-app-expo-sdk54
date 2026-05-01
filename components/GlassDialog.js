@@ -95,10 +95,16 @@ const GlassDialog = ({ visible, title, message, actions = [], type = 'info', onD
         <Animated.View style={[styles.dialogBody, animatedStyle]}>
           {/* Main Glass Surface using hardware-accelerated BlurView */}
           <BlurView 
-            intensity={70} 
-            tint="light" 
+            intensity={isDarkMode ? 50 : 70} 
+            tint={isDarkMode ? "dark" : "light"} 
             experimentalBlurMethod="dimezisBlurView"
-            style={styles.blurContainer}
+            style={[
+              styles.blurContainer,
+              { 
+                backgroundColor: isDarkMode ? 'rgba(30,30,30,0.6)' : 'rgba(255,255,255,0.12)',
+                borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.35)'
+              }
+            ]}
           >
 
             {/* Very subtle glass highlight */}
@@ -106,9 +112,9 @@ const GlassDialog = ({ visible, title, message, actions = [], type = 'info', onD
               <Svg height="100%" width="100%">
                 <Defs>
                   <SvgGradient id="glassSheen" x1="0" y1="0" x2="1" y2="1">
-                    <Stop offset="0" stopColor="white" stopOpacity="0.1" />
+                    <Stop offset="0" stopColor={isDarkMode ? "white" : "white"} stopOpacity={isDarkMode ? "0.05" : "0.1"} />
                     <Stop offset="0.5" stopColor="white" stopOpacity="0.02" />
-                    <Stop offset="1" stopColor="white" stopOpacity="0.05" />
+                    <Stop offset="1" stopColor="white" stopOpacity={isDarkMode ? "0.03" : "0.05"} />
                   </SvgGradient>
                 </Defs>
                 <Rect width="100%" height="100%" fill="url(#glassSheen)" />
@@ -120,10 +126,10 @@ const GlassDialog = ({ visible, title, message, actions = [], type = 'info', onD
               {/* Type Icon & Heading */}
               <View style={styles.headerRow}>
                 <Ionicons name={icon.name} size={42} color={icon.color} style={styles.typeIcon} />
-                {title && <Text style={styles.title}>{title}</Text>}
+                {title && <Text style={[styles.title, { color: isDarkMode ? '#FFFFFF' : '#000000' }]}>{title}</Text>}
               </View>
 
-              {message && <Text style={styles.message}>{message}</Text>}
+              {message && <Text style={[styles.message, { color: isDarkMode ? 'rgba(255,255,255,0.8)' : '#000000' }]}>{message}</Text>}
 
 
               {/* Action Buttons */}
@@ -157,7 +163,10 @@ const GlassDialog = ({ visible, title, message, actions = [], type = 'info', onD
                       styles.capsuleButton, 
                       styles.cancelButton, 
                       styles.shadowProps,
-                      { marginTop: mainActions.length > 0 ? 12 : 0 }
+                      { 
+                        marginTop: mainActions.length > 0 ? 12 : 0,
+                        backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#444444'
+                      }
                     ]}
                     onPress={() => handleAction(action.onPress)}
                     activeOpacity={0.8}

@@ -82,6 +82,7 @@ export const fetchWeather = async () => {
       cityName,
       isNight,
       weatherId,
+      icon: data.weather[0].icon,
     };
   } catch (error) {
     console.warn('[Weather] Failed to fetch weather:', error.message);

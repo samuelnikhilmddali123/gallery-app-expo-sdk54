@@ -1122,9 +1122,12 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   // Dialog Context
   const { showConfirm, showAlert, showCustomConfirm } = useDialog();
 
-  // Toggle Controls Logic
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsOpacity = useSharedValue(1);
+
+  // Swipe-to-close shared values
+  const translateY = useSharedValue(0);
+  const exitOpacity = useSharedValue(1);
 
   const toggleControls = useCallback(() => {
     setControlsVisible(prev => !prev);
@@ -1255,19 +1258,43 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   // Vertical swipe gesture to exit Viewer
   const verticalSwipeGesture = Gesture.Pan()
     .enabled(!isZoomed) // Only enable when not zoomed
-    .activeOffsetY([-50, 50]) // Require 50px vertical movement to activate
+    .activeOffsetY([0, 10]) // Require small downward movement to activate
     .failOffsetX([-20, 20]) // Quickly fail on horizontal intent so FlatList swipe wins
+    .onUpdate((event) => {
+      'worklet';
+      if (event.translationY > 0) {
+        translateY.value = event.translationY;
+        // Fade background as we swipe down
+        exitOpacity.value = Math.max(0, 1 - (event.translationY / (dimensions.height * 0.6)));
+        
+        // Hide controls while swiping
+        controlsOpacity.value = Math.max(0, 1 - (event.translationY / 100));
+      }
+    })
     .onEnd((event) => {
       'worklet';
-      // If vertical velocity is significant, exit
-      const verticalVelocity = Math.abs(event.velocityY);
-      const horizontalVelocity = Math.abs(event.velocityX);
+      const shouldExit = translateY.value > 150 || event.velocityY > 800;
 
-      // Only trigger if vertical movement is dominant
-      if (verticalVelocity > 500 && verticalVelocity > horizontalVelocity) {
+      if (shouldExit) {
+        // Exit animation
+        translateY.value = withTiming(dimensions.height, { duration: 250 });
+        exitOpacity.value = withTiming(0, { duration: 250 });
         runOnJS(handleBackPress)();
+      } else {
+        // Snap back
+        translateY.value = withTiming(0, { duration: 250 });
+        exitOpacity.value = withTiming(1, { duration: 250 });
+        controlsOpacity.value = withTiming(controlsVisible ? 1 : 0, { duration: 250 });
       }
     });
+
+  const swipeAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  const backgroundAnimatedStyle = useAnimatedStyle(() => ({
+    backgroundColor: `rgba(0, 0, 0, ${exitOpacity.value})`,
+  }));
 
   const handleDelete = () => {
     if (!currentItem) return;
@@ -1473,8 +1500,9 @@ export default function ViewerScreen({ route, navigation: navProp }) {
   const isPhoto = currentItem && !isVideoItem(currentItem);
 
   return (
-      <View style={styles.container}>
-        <Animated.View style={[StyleSheet.absoluteFill, flatListStyle]}>
+    <GestureDetector gesture={verticalSwipeGesture}>
+      <Animated.View style={[styles.container, backgroundAnimatedStyle]}>
+        <Animated.View style={[StyleSheet.absoluteFill, flatListStyle, swipeAnimatedStyle]}>
           <FlatList
             ref={flatListRef}
             data={mediaItems}
@@ -1506,7 +1534,7 @@ export default function ViewerScreen({ route, navigation: navProp }) {
         </Animated.View>
 
         {/* Top Bar with Controls - Rendered AFTER FlatList to be on top */}
-        <Animated.View style={[styles.safeArea, topBarStyle]} pointerEvents={controlsVisible ? 'auto' : 'none'}>
+        <Animated.View style={[styles.safeArea, topBarStyle, swipeAnimatedStyle]} pointerEvents={controlsVisible ? 'auto' : 'none'}>
           <SafeAreaView edges={['top']}>
             <View style={styles.topBar}>
               <TouchableOpacity onPress={() => { Haptics.selectionAsync(); handleBackPress(); }} style={styles.actionButton}>
@@ -1536,7 +1564,8 @@ export default function ViewerScreen({ route, navigation: navProp }) {
           </SafeAreaView>
         </Animated.View>
 
-      </View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 

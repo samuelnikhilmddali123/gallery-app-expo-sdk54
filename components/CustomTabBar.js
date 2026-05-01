@@ -11,7 +11,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useTheme } from '../contexts/ThemeContext';
 
-const BUBBLE_SIZE = 44;
+const BUBBLE_SIZE = 48;
 
 // Safety fallback for environments where BlurView is not supported or native code is missing
 const SafeBlurView = ({ children, style, intensity, tint }) => {
@@ -58,13 +58,13 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
   };
 
   return (
-    <View style={styles.floatingContainer} onLayout={onLayout}>
+    <View style={styles.floatingContainer}>
       <SafeBlurView
         intensity={50}
         tint="dark"
         style={styles.blurWrapper}
       >
-        <View style={styles.content}>
+        <View style={styles.content} onLayout={onLayout}>
           <Animated.View style={[styles.bubble, animatedBubbleStyle]} />
           {state.routes.map((route, index) => {
             const isFocused = state.index === index;
@@ -87,7 +87,8 @@ const CustomTabBar = ({ state, descriptors, navigation }) => {
 
             let iconName;
             if (route.name === 'Home') iconName = isFocused ? 'home' : 'home-outline';
-            else if (route.name === 'Profile') iconName = isFocused ? 'person' : 'person-outline';
+            else if (route.name === 'Albums') iconName = isFocused ? 'images' : 'images-outline';
+            else if (route.name === 'Weather') iconName = isFocused ? 'cloudy' : 'cloudy-outline';
 
             return (
               <TouchableOpacity
@@ -115,7 +116,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 24,
     alignSelf: 'center',
-    width: '45%',
+    width: '65%',
     height: 64,
     borderRadius: 32,
     overflow: 'hidden',
@@ -136,13 +137,14 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 4,
   },
   bubble: {
     position: 'absolute',
     width: BUBBLE_SIZE,
     height: BUBBLE_SIZE,
     borderRadius: BUBBLE_SIZE / 2,
+    top: '50%',
+    marginTop: -BUBBLE_SIZE / 2,
     backgroundColor: 'rgba(123, 97, 255, 0.15)',
     borderWidth: 1.5,
     borderColor: 'rgba(123, 97, 255, 0.4)',

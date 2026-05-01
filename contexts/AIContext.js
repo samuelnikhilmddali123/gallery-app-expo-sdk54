@@ -67,6 +67,10 @@ export const AIProvider = ({ children }) => {
       const uriLookup = {};
       allAssets.forEach(a => uriLookup[a.id] = a.uri);
 
+      // 1.5 Get profile photo if available
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const profileImageUri = await AsyncStorage.getItem('gallery_profile_image');
+
       // 2. Perform background analysis
       const scanResults = await scanGalleryWithAI(
         allAssets.map(a => ({ id: a.id, uri: a.uri })),
@@ -78,7 +82,8 @@ export const AIProvider = ({ children }) => {
                 setLastScannedUri(uriLookup[id]);
               }
           }
-        }
+        },
+        profileImageUri
       );
 
       setResults(scanResults);

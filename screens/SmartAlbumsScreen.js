@@ -313,7 +313,11 @@ export default function SmartAlbumsScreen({ navigation }) {
                   size={16}
                   color={activeTab === tab.key ? '#fff' : colors.textSecondary}
                 />
-                <Text style={[styles.tabLabel, { color: activeTab === tab.key ? '#fff' : colors.text }]}>
+                <Text 
+                  style={[styles.tabLabel, { color: activeTab === tab.key ? '#fff' : colors.text }]} 
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
                   {tab.label}
                 </Text>
                 <View style={[styles.tabBadge, {
@@ -417,17 +421,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 30,
-    paddingVertical: 18,
-    borderRadius: 30,
+    paddingHorizontal: 36,
+    paddingVertical: 20,
+    borderRadius: 35,
     marginBottom: 20,
     shadowColor: '#7B61FF',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 10,
   },
-  scanButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  scanButtonText: { color: '#fff', fontSize: 17, fontWeight: '800' },
   infoBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -438,17 +442,24 @@ const styles = StyleSheet.create({
   },
   infoText: { fontSize: 13, flex: 1, lineHeight: 20 },
   tabsScroll: { flexGrow: 0, marginTop: 10 },
-  tabs: { paddingHorizontal: 20, gap: 10, paddingVertical: 8 },
+  tabs: { paddingHorizontal: 20, paddingVertical: 8, flexDirection: 'row' },
   tab: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 25,
-    borderWidth: 1,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 30,
+    borderWidth: 1.5,
+    marginRight: 12,
+    flexShrink: 0,
   },
-  tabLabel: { fontSize: 14, fontWeight: '600' },
+  tabLabel: { 
+    fontSize: 16, 
+    fontWeight: '700',
+    marginLeft: 8,
+    marginRight: 8,
+    flexShrink: 0,
+  },
   tabBadge: {
     minWidth: 22,
     height: 18,
@@ -486,9 +497,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     marginHorizontal: 20,
-    padding: 16,
-    borderRadius: 24,
-    borderWidth: 1.5,
+    padding: 18,
+    borderRadius: 28,
+    borderWidth: 2,
   },
   rescanText: { fontSize: 15, fontWeight: '600' },
   scanningOverlay: {

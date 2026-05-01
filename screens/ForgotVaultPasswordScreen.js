@@ -15,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
 import { useDialog } from '../contexts/DialogContext';
+import { Ionicons } from '@expo/vector-icons';
+
 
 
 export default function ForgotVaultPasswordScreen({ onComplete, onCancel }) {

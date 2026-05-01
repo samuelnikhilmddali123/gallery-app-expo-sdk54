@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
 import { Image as ExpoImage } from 'expo-image';
@@ -10,7 +11,7 @@ import * as Haptics from 'expo-haptics';
 import { useTheme } from '../contexts/ThemeContext';
 
 export default function AlbumsScreen({ navigation }) {
-  const { colors } = useTheme();
+  const { colors, isDarkMode } = useTheme();
   const [albums, setAlbums] = useState([]);
   const [loading, setLoading] = useState(false); // Start with false for immediate UI
 
@@ -118,34 +119,36 @@ export default function AlbumsScreen({ navigation }) {
 
   const renderAlbumItem = ({ item }) => (
     <TouchableOpacity
-      style={[styles.albumItem, { backgroundColor: colors.itemBackground }]}
+      style={styles.albumItemWrapper}
       onPress={() => {
         Haptics.selectionAsync();
         navigation.navigate('AlbumView', { album: item });
       }}
       onLongPress={() => handleLongPress(item)}
-      activeOpacity={0.7}
+      activeOpacity={0.8}
     >
-      {item.coverUri ? (
-        <ExpoImage
-          source={{ uri: item.coverUri }}
-          style={styles.albumCover}
-          contentFit="cover"
-        />
-      ) : (
-        <View style={[styles.albumCover, styles.albumPlaceholder, { backgroundColor: colors.searchBar }]}>
-          <Ionicons name="images-outline" size={40} color={colors.icon} />
+      <BlurView intensity={30} tint={isDarkMode ? "dark" : "light"} style={styles.albumItem}>
+        {item.coverUri ? (
+          <ExpoImage
+            source={{ uri: item.coverUri }}
+            style={styles.albumCover}
+            contentFit="cover"
+          />
+        ) : (
+          <View style={[styles.albumCover, styles.albumPlaceholder, { backgroundColor: colors.searchBar }]}>
+            <Ionicons name="images-outline" size={32} color={colors.icon} />
+          </View>
+        )}
+        <View style={styles.albumInfo}>
+          <Text style={[styles.albumTitle, { color: colors.text }]} numberOfLines={1}>
+            {String(item.title || '')}
+          </Text>
+          <Text style={[styles.albumCount, { color: colors.textSecondary }]}>
+            {item.assetCount} {item.assetCount === 1 ? 'item' : 'items'}
+          </Text>
         </View>
-      )}
-      <View style={styles.albumInfo}>
-        <Text style={[styles.albumTitle, { color: colors.text }]} numberOfLines={1}>
-          {String(item.title || '')}
-        </Text>
-        <Text style={[styles.albumCount, { color: colors.searchPlaceholder }]}>
-          {item.assetCount} {item.assetCount === 1 ? 'item' : 'items'}
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={20} color={colors.icon} />
+        <Ionicons name="chevron-forward" size={20} color={colors.icon} />
+      </BlurView>
     </TouchableOpacity>
   );
 
@@ -160,7 +163,8 @@ export default function AlbumsScreen({ navigation }) {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.text }]}>Albums</Text>
       </View>
@@ -179,7 +183,8 @@ export default function AlbumsScreen({ navigation }) {
           </View>
         }
       />
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
@@ -200,22 +205,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  safeArea: {
+    flex: 1,
+  },
   list: {
     paddingHorizontal: 16,
-    paddingBottom: 16,
+    paddingBottom: 100, // Space for tab bar
+  },
+  albumItemWrapper: {
+    marginBottom: 16,
+    borderRadius: 20,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   albumItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    marginBottom: 12,
-    borderRadius: 12,
+    padding: 16,
+    backgroundColor: 'transparent',
   },
   albumCover: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginRight: 12,
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    marginRight: 16,
   },
   albumPlaceholder: {
     justifyContent: 'center',

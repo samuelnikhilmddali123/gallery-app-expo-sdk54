@@ -18,9 +18,11 @@ import * as Haptics from 'expo-haptics';
 
 
 import { useTheme } from '../contexts/ThemeContext';
+import { useVault } from '../contexts/VaultContext';
+import { useDialog } from '../contexts/DialogContext';
+import { getVaultMedia, removeMediaFromVault } from '../services/vaultService';
 import { moveMediaToVault } from '../services/mediaService';
 import VaultPasswordScreen from './VaultPasswordScreen';
-import { useDialog } from '../contexts/DialogContext';
 
 
 const { width } = Dimensions.get('window');

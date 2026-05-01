@@ -414,7 +414,7 @@ const WEATHER_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 export const ThemeProvider = ({ children }) => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [weatherData, setWeatherData] = useState(null); // { themeKey, temperature, description, cityName, isNight }
-  const [weatherMode, setWeatherMode] = useState(true);  // Can be toggled by user
+  const [weatherMode, setWeatherMode] = useState(false);  // Disabled weather theme by default
 
   // ── Load persisted prefs ──────────────────────────────────────────────────
   useEffect(() => {
@@ -484,16 +484,7 @@ export const ThemeProvider = ({ children }) => {
     }
   };
 
-  // ── Resolve current colour set ───────────────────────────────────────────
-  const resolveColors = () => {
-    if (weatherMode && weatherData?.themeKey) {
-      const palette = WEATHER_PALETTES[weatherData.themeKey];
-      return palette ? (isDarkMode ? palette.dark : palette.light) : (isDarkMode ? DEFAULT_DARK : DEFAULT_LIGHT);
-    }
-    return isDarkMode ? DEFAULT_DARK : DEFAULT_LIGHT;
-  };
-
-  const colors = resolveColors();
+  const colors = isDarkMode ? DEFAULT_DARK : DEFAULT_LIGHT;
 
   const theme = {
     isDarkMode,
@@ -509,6 +500,7 @@ export const ThemeProvider = ({ children }) => {
       temperature: weatherData.temperature,
       cityName: weatherData.cityName,
       description: weatherData.description,
+      iconId: weatherData.icon || '01d',
     } : null,
   };
 
