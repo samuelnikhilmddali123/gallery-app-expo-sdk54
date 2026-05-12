@@ -9,9 +9,11 @@ import * as Haptics from 'expo-haptics';
 
 
 import { useTheme } from '../contexts/ThemeContext';
+import { useDialog } from '../contexts/DialogContext';
 
 export default function AlbumsScreen({ navigation }) {
   const { colors, isDarkMode } = useTheme();
+  const { showConfirm, showCustomConfirm, showAlert } = useDialog();
   const [albums, setAlbums] = useState([]);
   const [loading, setLoading] = useState(false); // Start with false for immediate UI
 
@@ -112,10 +114,49 @@ export default function AlbumsScreen({ navigation }) {
     }
   };
 
+  const handleDeleteAlbum = useCallback(async (album) => {
+    showCustomConfirm(
+      'Delete Album?',
+      `Are you sure you want to delete "${album.title}"? This will delete all ${album.assetCount} items inside it.`,
+      [
+        {
+          text: 'Delete All Assets',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const assetsRes = await MediaLibrary.getAssetsAsync({
+                album: album.id,
+                first: album.assetCount || 1000,
+              });
+              
+              if (assetsRes.assets.length > 0) {
+                const assetIds = assetsRes.assets.map(a => a.id);
+                const success = await MediaLibrary.deleteAssetsAsync(assetIds);
+                if (success) {
+                  loadAlbums();
+                  showAlert('Success', 'Album assets deleted', null, 'success');
+                }
+              } else {
+                showAlert('Info', 'Album is already empty', null, 'info');
+              }
+            } catch (error) {
+              console.error('Delete album error:', error);
+              showAlert('Error', 'Failed to delete album assets', null, 'error');
+            }
+          }
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        }
+      ]
+    );
+  }, [loadAlbums, showCustomConfirm, showAlert]);
+
   const handleLongPress = useCallback((item) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    // Logic for long press actions
-  }, []);
+    handleDeleteAlbum(item);
+  }, [handleDeleteAlbum]);
 
   const renderAlbumItem = ({ item }) => (
     <TouchableOpacity

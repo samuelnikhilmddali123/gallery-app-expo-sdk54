@@ -9,7 +9,7 @@ import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAI } from '../contexts/AIContext';
-import { BlurView } from 'expo-blur';
+import SafeBlurView from '../components/SafeBlurView';
 import * as Haptics from 'expo-haptics';
 import { useDialog } from '../contexts/DialogContext';
 
@@ -167,13 +167,13 @@ export default function SmartAlbumsScreen({ navigation }) {
           }} 
           style={styles.backBtn}
         >
-          <BlurView
+          <SafeBlurView
             intensity={30}
             tint={isDarkMode ? 'dark' : 'light'}
             style={styles.backBtnGlass}
           >
             <Ionicons name="chevron-back" size={24} color={colors.text} />
-          </BlurView>
+          </SafeBlurView>
         </TouchableOpacity>
         <View style={styles.headerTextContainer}>
           <Text style={[styles.headerTitle, { color: colors.text }]}>AI Smart Albums</Text>
@@ -195,13 +195,13 @@ export default function SmartAlbumsScreen({ navigation }) {
                   true
                 );
             }} style={styles.backBtn}>
-              <BlurView
+              <SafeBlurView
                 intensity={30}
                 tint={isDarkMode ? 'dark' : 'light'}
                 style={styles.backBtnGlass}
               >
                 <Ionicons name="trash-outline" size={20} color={colors.textSecondary} />
-              </BlurView>
+              </SafeBlurView>
             </TouchableOpacity>
           )}
         </View>
@@ -210,7 +210,7 @@ export default function SmartAlbumsScreen({ navigation }) {
       {/* Scan Button Area */}
       {!results && !isAnalyzing && (
         <View style={styles.scanPromptContainer}>
-          <BlurView
+          <SafeBlurView
             intensity={40}
             tint={isDarkMode ? 'dark' : 'light'}
             style={[styles.scanCard, { borderColor: isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.05)' }]}
@@ -242,14 +242,14 @@ export default function SmartAlbumsScreen({ navigation }) {
                 Private & Secure. All processing happens locally on your device. No data ever leaves your phone.
               </Text>
             </View>
-          </BlurView>
+          </SafeBlurView>
         </View>
       )}
 
       {/* Scanning Progress */}
       {isAnalyzing && (
         <View style={styles.scanningOverlay}>
-          <BlurView
+          <SafeBlurView
             intensity={60}
             tint={isDarkMode ? 'dark' : 'light'}
             style={StyleSheet.absoluteFillObject}

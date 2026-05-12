@@ -299,37 +299,46 @@ export default function TrashScreen({ navigation }) {
     }
   };
 
-  const handleLongPress = useCallback((item) => {
-    if (!isSelectionMode) {
-      // Impact feedback for long press
+  const handleLongPress = useCallback((item, index) => {
+    const itemId = item.id.toString();
+    const isSelected = selectedItems.has(itemId);
+
+    if (isSelected) {
+      // Long press on selected -> Open viewer
+      navigation.navigate('Viewer', {
+        item: { ...item, isTrash: true },
+        allItems: trashItems.map(i => ({ ...i, isTrash: true })),
+        initialIndex: index
+      });
+    } else {
+      // Long press on unselected -> Toggle selection
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
       setIsSelectionMode(true);
-      setSelectedItems(new Set([item.id.toString()]));
+      
+      setSelectedItems(prev => {
+        const newSet = new Set(prev);
+        newSet.add(itemId);
+        return newSet;
+      });
+      Haptics.selectionAsync();
     }
-
-  }, [isSelectionMode]);
+  }, [selectedItems, trashItems, navigation]);
 
   const handleItemPress = useCallback((item, index) => {
     if (isSelectionMode) {
-      // Toggle selection
+      // Toggle selection in selection mode
       const itemId = item.id.toString();
       setSelectedItems(prev => {
         const newSet = new Set(prev);
         if (newSet.has(itemId)) {
           newSet.delete(itemId);
-          // Exit selection mode if no items selected
-          if (newSet.size === 0) {
-            setIsSelectionMode(false);
-          }
+          if (newSet.size === 0) setIsSelectionMode(false);
         } else {
-          // Subtle feedback for selection
-          Haptics.selectionAsync();
           newSet.add(itemId);
         }
-
         return newSet;
       });
+      Haptics.selectionAsync();
     } else {
       // Normal behavior - open viewer
       navigation.navigate('Viewer', {
@@ -672,7 +681,7 @@ export default function TrashScreen({ navigation }) {
         index={index}
         isSelected={isSelected}
         onPress={() => handleItemPress(item, index)}
-        onLongPress={() => handleLongPress(item)}
+        onLongPress={() => handleLongPress(item, index)}
         colors={colors}
       />
     );

@@ -220,17 +220,19 @@ export default function FolderDetailScreen({ navigation, route }) {
                 ]}
                 onPress={() => {
                     if (isSelectionMode) {
+                        const itemId = item.id;
                         setSelectedItems(prev => {
                             const next = new Set(prev);
-                            if (next.has(item.id)) next.delete(item.id);
-                            else next.add(item.id);
+                            if (next.has(itemId)) {
+                                next.delete(itemId);
+                                if (next.size === 0) setIsSelectionMode(false);
+                            } else {
+                                next.add(itemId);
+                            }
                             return next;
                         });
                     } else {
-                        // Navigate to viewer with this context?
-                        // For simplicity, navigating to general Viewer might need context adjustment
-                        // Or just use ViewerScreen with passed full list.
-                        // Assuming ViewerScreen can take `allItems`
+                        // Tap opens viewer
                         navigation.navigate('Viewer', {
                             item: item,
                             allItems: media,
@@ -239,8 +241,25 @@ export default function FolderDetailScreen({ navigation, route }) {
                     }
                 }}
                 onLongPress={() => {
-                    setIsSelectionMode(true);
-                    setSelectedItems(new Set([item.id]));
+                    const itemId = item.id;
+                    const isSelected = selectedItems.has(itemId);
+
+                    if (isSelected) {
+                        // Long press on selected -> Open viewer
+                        navigation.navigate('Viewer', {
+                            item: item,
+                            allItems: media,
+                            initialIndex: media.indexOf(item)
+                        });
+                    } else {
+                        // Long press on unselected -> Toggle selection
+                        setIsSelectionMode(true);
+                        setSelectedItems(prev => {
+                            const next = new Set(prev);
+                            next.add(itemId);
+                            return next;
+                        });
+                    }
                 }}
                 activeOpacity={0.8}
             >

@@ -155,30 +155,44 @@ export default function AlbumViewScreen({ route, navigation }) {
     }
   }, [album, loadAlbumMedia]);
 
-  const handleLongPress = useCallback((item) => {
-    if (!isSelectionMode) {
+  const handleLongPress = useCallback((item, index) => {
+    const itemId = item.id.toString();
+    const isSelected = selectedItems.has(itemId);
+
+    if (isSelected) {
+      // Long press on selected -> Open viewer
+      navigation.navigate('Viewer', {
+        item,
+        allItems: media,
+        initialIndex: index
+      });
+    } else {
+      // Long press on unselected -> Toggle selection
       setIsSelectionMode(true);
-      setSelectedItems(new Set([item.id.toString()]));
+      setSelectedItems(prev => {
+        const newSet = new Set(prev);
+        newSet.add(itemId);
+        return newSet;
+      });
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
-  }, [isSelectionMode]);
+  }, [selectedItems, media, navigation]);
 
   const handleItemPress = useCallback((item, index) => {
     if (isSelectionMode) {
-      // Toggle selection
+      // Toggle selection in selection mode
       const itemId = item.id.toString();
       setSelectedItems(prev => {
         const newSet = new Set(prev);
         if (newSet.has(itemId)) {
           newSet.delete(itemId);
-          // Exit selection mode if no items selected
-          if (newSet.size === 0) {
-            setIsSelectionMode(false);
-          }
+          if (newSet.size === 0) setIsSelectionMode(false);
         } else {
           newSet.add(itemId);
         }
         return newSet;
       });
+      Haptics.selectionAsync();
     } else {
       // Normal behavior - open viewer
       navigation.navigate('Viewer', {
@@ -363,7 +377,7 @@ export default function AlbumViewScreen({ route, navigation }) {
         index={index}
         isSelected={isSelected}
         onPress={() => handleItemPress(item, index)}
-        onLongPress={() => handleLongPress(item)}
+        onLongPress={() => handleLongPress(item, index)}
         colors={colors}
         size={itemSize}
       />

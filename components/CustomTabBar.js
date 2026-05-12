@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
@@ -10,25 +9,9 @@ import Animated, {
   withSpring 
 } from 'react-native-reanimated';
 import { useTheme } from '../contexts/ThemeContext';
+import SafeBlurView from './SafeBlurView';
 
 const BUBBLE_SIZE = 48;
-
-// Safety fallback for environments where BlurView is not supported or native code is missing
-const SafeBlurView = ({ children, style, intensity, tint }) => {
-  try {
-    return (
-      <BlurView intensity={intensity} tint={tint} style={style}>
-        {children}
-      </BlurView>
-    );
-  } catch (e) {
-    return (
-      <View style={[style, { backgroundColor: tint === 'dark' ? 'rgba(30,30,30,0.9)' : 'rgba(255,255,255,0.9)' }]}>
-        {children}
-      </View>
-    );
-  }
-};
 
 const CustomTabBar = ({ state, descriptors, navigation }) => {
   const { isDarkMode } = useTheme();

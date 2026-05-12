@@ -1,4 +1,3 @@
-import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,12 +14,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import React, { useEffect, useState, useRef } from 'react';
 
 
 import { useTheme } from '../contexts/ThemeContext';
 import { useVault } from '../contexts/VaultContext';
 import { useDialog } from '../contexts/DialogContext';
-import { getVaultMedia, removeMediaFromVault } from '../services/vaultService';
+import { getVaultMedia, restoreMediaFromVault } from '../services/vaultService';
 import { moveMediaToVault } from '../services/mediaService';
 import VaultPasswordScreen from './VaultPasswordScreen';
 
@@ -32,10 +32,16 @@ const ITEM_SIZE = (width - GAP * (NUM_COLUMNS + 1)) / NUM_COLUMNS;
 
 export default function VaultScreen({ navigation, onLock }) {
   const { colors } = useTheme();
-  const { lockVault, isVaultUnlocked, unlockVault, verifyPassword } = useVault();
+  const { 
+    lockVault, 
+    isVaultUnlocked, 
+    unlockVault, 
+    vaultMedia, 
+    isMediaLoading, 
+    loadVaultMedia, 
+    removeMediaFromVaultContext 
+  } = useVault();
   const { showAlert } = useDialog();
-  const [vaultMedia, setVaultMedia] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showPasswordScreen, setShowPasswordScreen] = useState(false);
 
@@ -58,62 +64,47 @@ export default function VaultScreen({ navigation, onLock }) {
     return () => subscription?.remove();
   }, [lockVault, onLock]);
 
-  // Note: Screenshot protection (FLAG_SECURE) requires native code changes
-  // For full implementation, you would need to:
-  // 1. Create a custom native module or
-  // 2. Use expo-build-properties with a config plugin
-  // The structure is in place, but requires native Android/iOS code
-
-  // Load vault media - optimized
-  const loadVaultMedia = async (showLoader = true) => {
-    try {
-      if (showLoader) setLoading(true);
-      // Use skipFileCheck for faster loading, but force cache bypass if not showing loader (refreshing)
-      const ignoreCache = !showLoader;
-      const media = await getVaultMedia(true, ignoreCache);
-      // Sort by creation time (newest first)
-      media.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      setVaultMedia(media);
-    } catch (error) {
-      console.error('Error loading vault media:', error);
-      showAlert('Error', 'Failed to load vault media', null, 'error');
-    } finally {
-
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
   useEffect(() => {
     // Check if vault is unlocked when screen loads
     if (!isVaultUnlocked) {
       setShowPasswordScreen(true);
-    } else {
+    } else if (vaultMedia.length === 0) {
       loadVaultMedia();
     }
   }, []);
 
   // Load media when vault is unlocked
   useEffect(() => {
-    if (isVaultUnlocked && !showPasswordScreen) {
+    if (isVaultUnlocked && !showPasswordScreen && vaultMedia.length === 0) {
       loadVaultMedia();
     }
   }, [isVaultUnlocked, showPasswordScreen]);
 
 
 
-  // Handle long press to remove from vault
+  // Handle long press to restore from vault to gallery
   const handleLongPress = async (item) => {
-    // Directly remove without confirmation
-    const success = await removeMediaFromVault(item.id);
-    if (success) {
-      // Success feedback for removal
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      loadVaultMedia();
-    } else {
-      showAlert('Error', 'Failed to remove item from vault', null, 'error');
-    }
-
+    // Show a confirmation before restoring
+    showAlert(
+      'Restore to Gallery',
+      'This will move the item back to your public gallery and it will be visible in other apps.',
+      async () => {
+        try {
+          const success = await restoreMediaFromVault(item.id);
+          if (success) {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            // Instantly remove from UI
+            removeMediaFromVaultContext(item.id);
+          } else {
+            showAlert('Error', 'Failed to restore item to gallery', null, 'error');
+          }
+        } catch (error) {
+          console.error('Restore Error:', error);
+          showAlert('Error', 'An error occurred while restoring.');
+        }
+      },
+      'confirm'
+    );
   };
 
 
@@ -169,7 +160,7 @@ export default function VaultScreen({ navigation, onLock }) {
     );
   }
 
-  if (loading) {
+  if (isMediaLoading && vaultMedia.length === 0) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -193,7 +184,6 @@ export default function VaultScreen({ navigation, onLock }) {
               if (onLock) onLock();
               navigation.goBack();
             }}
-
             style={styles.backButton}
           >
             <Ionicons name="arrow-back" size={24} color={colors.icon} />
@@ -215,9 +205,10 @@ export default function VaultScreen({ navigation, onLock }) {
             vaultMedia.length === 0 && styles.gridEmpty,
           ]}
           refreshing={refreshing}
-          onRefresh={() => {
+          onRefresh={async () => {
             setRefreshing(true);
-            loadVaultMedia(false);
+            await loadVaultMedia(true);
+            setRefreshing(false);
           }}
         />
 

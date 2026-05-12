@@ -15,7 +15,11 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as MediaLibrary from 'expo-media-library';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import * as Sharing from 'expo-sharing';
 import { useTheme } from '../contexts/ThemeContext';
+import { useDialog } from '../contexts/DialogContext';
+import { moveMediaToAppTrash } from '../services/trashService';
 
 // --- CONFIGURATION ---
 const NUM_COLUMNS = 3;
@@ -26,7 +30,7 @@ const ITEM_SIZE = Math.floor(width / NUM_COLUMNS);
 /**
  * 🖼️ MediaItem Component
  */
-const MediaItem = React.memo(({ item, backgroundColor, borderColor, onPress }) => {
+const MediaItem = React.memo(({ item, backgroundColor, borderColor, onPress, onLongPress, isSelected, isSelectionMode }) => {
   if (item.empty) {
     return <View style={[styles.itemContainer, { backgroundColor: 'transparent', borderLeftWidth: 0 }]} />;
   }
@@ -35,6 +39,7 @@ const MediaItem = React.memo(({ item, backgroundColor, borderColor, onPress }) =
     <TouchableOpacity 
       activeOpacity={0.7} 
       onPress={() => onPress(item)}
+      onLongPress={() => onLongPress(item)}
       style={[styles.itemContainer, { backgroundColor, borderColor }]}
     >
       <Image
@@ -44,6 +49,16 @@ const MediaItem = React.memo(({ item, backgroundColor, borderColor, onPress }) =
         transition={0}
         cachePolicy="memory-disk"
       />
+      
+      {/* Selection Overlay */}
+      {isSelected && (
+        <View style={styles.selectionOverlay}>
+          <View style={styles.checkBadge}>
+            <Ionicons name="checkmark" size={16} color="white" />
+          </View>
+        </View>
+      )}
+
       {item.mediaType === 'video' && (
         <View style={styles.videoIndicator}>
           <Ionicons name="play" size={12} color="white" />
@@ -64,6 +79,11 @@ export default function HomeScreen({ navigation }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [hasPermission, setHasPermission] = useState(null);
+  
+  // Selection State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedItems, setSelectedItems] = useState(new Set());
+  const { showAlert, showCustomConfirm } = useDialog();
 
   // --- REFS ---
   const endCursorRef = useRef(null);
@@ -158,15 +178,130 @@ export default function HomeScreen({ navigation }) {
     return list;
   }, [assets, searchQuery]);
 
+  const toggleSelection = useCallback((itemId) => {
+    setSelectedItems(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(itemId)) {
+        newSet.delete(itemId);
+        if (newSet.size === 0) setIsSelectionMode(false);
+      } else {
+        newSet.add(itemId);
+      }
+      return newSet;
+    });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, []);
+
   const handleItemPress = useCallback((item) => {
     if (item.empty) return;
-    const realAssets = displayData.filter(a => !a.empty);
-    navigation.navigate('Viewer', {
-      item,
-      allItems: realAssets,
-      initialIndex: realAssets.findIndex(a => a.id === item.id)
-    });
-  }, [displayData, navigation]);
+    
+    if (isSelectionMode) {
+      // Toggle selection in selection mode
+      toggleSelection(item.id);
+    } else {
+      // Normal mode -> Open in viewer
+      const realAssets = displayData.filter(a => !a.empty);
+      navigation.navigate('Viewer', {
+        item,
+        allItems: realAssets,
+        initialIndex: realAssets.findIndex(a => a.id === item.id)
+      });
+    }
+  }, [isSelectionMode, displayData, navigation, toggleSelection]);
+
+  const handleLongPress = useCallback((item) => {
+    if (item.empty) return;
+    const itemId = item.id;
+    const isSelected = selectedItems.has(itemId);
+
+    if (isSelected) {
+      // Long press on selected -> Open viewer
+      const realAssets = displayData.filter(a => !a.empty);
+      navigation.navigate('Viewer', {
+        item,
+        allItems: realAssets,
+        initialIndex: realAssets.findIndex(a => a.id === item.id)
+      });
+    } else {
+      // Long press on unselected -> Toggle selection (Start mode if needed)
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setIsSelectionMode(true);
+      toggleSelection(itemId);
+    }
+  }, [selectedItems, displayData, navigation, toggleSelection]);
+
+  const exitSelectionMode = useCallback(() => {
+    setIsSelectionMode(false);
+    setSelectedItems(new Set());
+  }, []);
+
+  const handleShareSelected = useCallback(async () => {
+    if (selectedItems.size === 0) return;
+    const assetsToShare = assets.filter(a => selectedItems.has(a.id));
+    if (assetsToShare.length === 0) return;
+
+    try {
+      if (Platform.OS === 'android') {
+        const { NativeModules } = require('react-native');
+        if (NativeModules.MultiShare) {
+          await NativeModules.MultiShare.shareImages(assetsToShare.map(a => a.uri));
+          exitSelectionMode();
+          return;
+        }
+      }
+      await Sharing.shareAsync(assetsToShare[0].uri);
+      exitSelectionMode();
+    } catch (error) {
+      console.error('[Home] Share error:', error);
+    }
+  }, [selectedItems, assets, exitSelectionMode]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    if (selectedItems.size === 0) return;
+    const selectedIds = Array.from(selectedItems);
+    const selectedMedia = assets.filter(a => selectedIds.includes(a.id));
+    
+    showCustomConfirm(
+      selectedIds.length > 1 ? `Delete ${selectedIds.length} items?` : "Delete photo?",
+      "Choose how you want to delete these items.",
+      [
+        {
+          text: 'Trash',
+          style: 'default',
+          onPress: async () => {
+            try {
+              for (const item of selectedMedia) {
+                await moveMediaToAppTrash(item);
+              }
+              const success = await MediaLibrary.deleteAssetsAsync(selectedIds);
+              if (success) {
+                setAssets(prev => prev.filter(a => !selectedIds.includes(a.id)));
+                exitSelectionMode();
+              }
+            } catch (error) {
+              console.error('[Home] Trash error:', error);
+            }
+          }
+        },
+        {
+          text: 'Permanently delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const success = await MediaLibrary.deleteAssetsAsync(selectedIds);
+              if (success) {
+                setAssets(prev => prev.filter(a => !selectedIds.includes(a.id)));
+                exitSelectionMode();
+              }
+            } catch (error) {
+              console.error('[Home] Delete error:', error);
+            }
+          }
+        },
+        { text: 'Cancel', style: 'cancel' }
+      ]
+    );
+  }, [selectedItems, assets, exitSelectionMode, showCustomConfirm]);
 
   /**
    * 📏 Performance
@@ -180,10 +315,13 @@ export default function HomeScreen({ navigation }) {
     <MediaItem 
       item={item} 
       onPress={handleItemPress}
+      onLongPress={handleLongPress}
+      isSelected={selectedItems.has(item.id)}
+      isSelectionMode={isSelectionMode}
       backgroundColor={skeletonColors.background}
       borderColor={skeletonColors.border}
     />
-  ), [handleItemPress, skeletonColors]);
+  ), [handleItemPress, handleLongPress, selectedItems, isSelectionMode, skeletonColors]);
 
   const keyExtractor = useCallback((item) => item.id, []);
 
@@ -201,28 +339,47 @@ export default function HomeScreen({ navigation }) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top', 'left', 'right']}>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       
-      {/* 1. Header (Search Bar) - Always above the list */}
-      <View style={styles.header}>
-        <View style={[styles.searchBar, { backgroundColor: isDarkMode ? '#222' : '#f0f0f0' }]}>
-          <Ionicons name="search" size={18} color={'#999'} style={{ marginRight: 8 }} />
-          <TextInput
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Search photos..."
-            placeholderTextColor={'#999'}
-            style={[styles.searchInput, { color: colors.text }]}
-            autoCapitalize="none"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={18} color={'#999'} />
+      {/* 1. Header (Search or Selection) */}
+      {isSelectionMode ? (
+        <View style={[styles.header, { backgroundColor: colors.itemBackground }]}>
+          <TouchableOpacity onPress={exitSelectionMode} style={styles.menuButton}>
+            <Ionicons name="close" size={28} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={[styles.headerTitleSelection, { color: colors.text }]}>
+            {selectedItems.size} Selected
+          </Text>
+          <View style={styles.selectionActions}>
+            <TouchableOpacity onPress={handleShareSelected} style={styles.actionButton}>
+              <Ionicons name="share-outline" size={24} color={colors.text} />
             </TouchableOpacity>
-          )}
+            <TouchableOpacity onPress={handleDeleteSelected} style={styles.actionButton}>
+              <Ionicons name="trash-outline" size={24} color="#ff3b30" />
+            </TouchableOpacity>
+          </View>
         </View>
-        <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.menuButton}>
-          <Ionicons name="menu-outline" size={28} color={colors.text} />
-        </TouchableOpacity>
-      </View>
+      ) : (
+        <View style={styles.header}>
+          <View style={[styles.searchBar, { backgroundColor: isDarkMode ? '#222' : '#f0f0f0' }]}>
+            <Ionicons name="search" size={18} color={'#999'} style={{ marginRight: 8 }} />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search photos..."
+              placeholderTextColor={'#999'}
+              style={[styles.searchInput, { color: colors.text }]}
+              autoCapitalize="none"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={18} color={'#999'} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.menuButton}>
+            <Ionicons name="menu-outline" size={28} color={colors.text} />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* 2. Main Gallery List - Only ONE FlatList used here */}
       {isInitialLoading ? (
@@ -315,10 +472,41 @@ const styles = StyleSheet.create({
   },
   videoIndicator: {
     position: 'absolute',
-    top: 6,
+    bottom: 6,
     right: 6,
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 10,
     padding: 2,
+  },
+  selectionOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,122,255,0.2)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    padding: 8,
+  },
+  checkBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  headerTitleSelection: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  selectionActions: {
+    flexDirection: 'row',
+    gap: 16,
+    alignItems: 'center',
+  },
+  actionButton: {
+    padding: 4,
   },
 });

@@ -40,23 +40,28 @@ export const moveMediaToVault = async (mediaItem, shouldDelete = true) => {
     // Step 4: Delete from MediaLibrary
     if (shouldDelete && isMediaLibraryAsset && mediaItem.id) {
       try {
-        // Force request for ALL permissions to ensure delete capability
-        // Force request for ALL permissions to ensure delete capability
-        // On Android, passing an object can cause crashes if keys are not expected
         const { status } = await MediaLibrary.requestPermissionsAsync();
 
         if (status === 'granted') {
-          // Pass the ID in an array. 
+          // Permanently delete the asset from the system gallery
           const success = await MediaLibrary.deleteAssetsAsync([mediaItem.id.toString()]);
           if (!success) {
-            console.warn('System delete dialog declined or delete failed');
+            console.warn('System delete failed or was cancelled');
+            // If system delete fails, we should still proceed as the vault copy is safe
           }
         } else {
-          console.warn('Media library permission not granted for deletion');
+          console.error('Media library permission not granted for deletion');
+          throw new Error('Permission denied for deleting original file');
         }
       } catch (deleteError) {
         console.error('Error deleting from MediaLibrary:', deleteError);
-        // Do not throw here, as the critical part (vault copy) succeeded.
+      }
+    } else if (shouldDelete && !isMediaLibraryAsset && sourceUri.startsWith('file://')) {
+      // If it's a direct file URI but not in MediaLibrary (e.g. from picker)
+      try {
+        await FileSystem.deleteAsync(sourceUri, { idempotent: true });
+      } catch (e) {
+        console.warn('Failed to delete source file directly:', e);
       }
     }
 

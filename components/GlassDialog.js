@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, Dimensions, Pressable, BackHandler } from 'react-native';
-import { BlurView } from 'expo-blur';
+import SafeBlurView from './SafeBlurView';
 import Svg, { Defs, LinearGradient as SvgGradient, Stop, Rect } from 'react-native-svg';
 import Animated, { 
   useSharedValue, 
@@ -93,8 +93,8 @@ const GlassDialog = ({ visible, title, message, actions = [], type = 'info', onD
 
         {/* Animated Dialog Body */}
         <Animated.View style={[styles.dialogBody, animatedStyle]}>
-          {/* Main Glass Surface using hardware-accelerated BlurView */}
-          <BlurView 
+          {/* Main Glass Surface using hardware-accelerated SafeBlurView */}
+          <SafeBlurView 
             intensity={isDarkMode ? 50 : 70} 
             tint={isDarkMode ? "dark" : "light"} 
             experimentalBlurMethod="dimezisBlurView"
@@ -178,7 +178,7 @@ const GlassDialog = ({ visible, title, message, actions = [], type = 'info', onD
                 ))}
               </View>
             </View>
-          </BlurView>
+          </SafeBlurView>
         </Animated.View>
       </View>
     </Modal>

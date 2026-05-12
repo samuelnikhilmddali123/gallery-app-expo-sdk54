@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BlurView } from 'expo-blur';
+import SafeBlurView from '../components/SafeBlurView';
 import Svg, { Path } from 'react-native-svg';
 import AnimatedWeatherIcon from '../components/AnimatedWeatherIcon';
 import AnimatedWeatherBackground from '../components/AnimatedWeatherBackground';
@@ -240,7 +240,7 @@ export default function WeatherScreen() {
 
                 {/* Bottom Toggle Slider */}
                 <View style={styles.toggleWrapper}>
-                    <BlurView intensity={50} tint="dark" style={styles.toggleContainer}>
+                    <SafeBlurView intensity={50} tint="dark" style={styles.toggleContainer}>
                         <Animated.View
                             style={[
                                 styles.activeBackground,
@@ -275,7 +275,7 @@ export default function WeatherScreen() {
                                 tab === 'WEEK' && styles.activeText
                             ]}>WEEK</Text>
                         </TouchableOpacity>
-                    </BlurView>
+                    </SafeBlurView>
                 </View>
 
                 {/* Horizontal Forecast List */}

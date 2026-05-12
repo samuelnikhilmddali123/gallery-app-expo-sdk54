@@ -6,7 +6,10 @@ import * as MediaLibrary from 'expo-media-library';
 import { Image } from 'expo-image';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
+import * as Sharing from 'expo-sharing';
 import { useTheme } from '../contexts/ThemeContext';
+import { useDialog } from '../contexts/DialogContext';
+import { moveMediaToAppTrash } from '../services/trashService';
 
 const { width } = Dimensions.get('window');
 const COLUMN_COUNT = 3;
@@ -14,6 +17,7 @@ const ITEM_SIZE = (width - 40) / COLUMN_COUNT;
 
 export default function CalendarScreen({ navigation }) {
   const { colors, isDarkMode } = useTheme();
+  const { showConfirm, showCustomConfirm, showAlert } = useDialog();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [dayPhotos, setDayPhotos] = useState([]);
@@ -128,10 +132,9 @@ export default function CalendarScreen({ navigation }) {
   }, []);
 
   const handleItemPress = useCallback((item, index) => {
-    const id = item._idStr || item.id.toString();
-    
     if (isSelectionMode) {
-      // Tap always toggles selection in selection mode
+      // Toggle selection in selection mode
+      const id = item._idStr || item.id.toString();
       toggleSelection(id);
     } else {
       // Normal mode -> Open in viewer
@@ -145,21 +148,102 @@ export default function CalendarScreen({ navigation }) {
 
   const handleLongPress = useCallback((item, index) => {
     const id = item._idStr || item.id.toString();
-    
-    if (isSelectionMode && selectedItems.has(id)) {
+    const isSelected = selectedItems.has(id);
+
+    if (isSelected) {
       // Long press on selected -> Open viewer
       navigation.navigate('Viewer', {
         item,
         allItems: dayPhotos,
         initialIndex: index
       });
-    } else if (!isSelectionMode) {
-      // Long press on unselected -> Start selection mode
+    } else {
+      // Long press on unselected -> Toggle selection
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setIsSelectionMode(true);
-      setSelectedItems(new Set([id]));
+      toggleSelection(id);
     }
-  }, [isSelectionMode, selectedItems, dayPhotos, navigation]);
+  }, [selectedItems, dayPhotos, navigation, toggleSelection]);
+
+  const handleShareSelected = useCallback(async () => {
+    if (selectedItems.size === 0) return;
+    
+    const assetsToShare = dayPhotos.filter(a => selectedItems.has(a._idStr || a.id.toString()));
+    if (assetsToShare.length === 0) return;
+
+    try {
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        showAlert("Error", "Sharing is not available on this device", null, 'error');
+        return;
+      }
+      await Sharing.shareAsync(assetsToShare[0].uri);
+    } catch (error) {
+      console.error('[Calendar] Share error:', error);
+    }
+  }, [selectedItems, dayPhotos, showAlert]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    if (selectedItems.size === 0) return;
+
+    const selectedIdsArray = Array.from(selectedItems);
+    const selectedMedia = dayPhotos.filter(item => selectedIdsArray.includes(item._idStr || item.id.toString()));
+    const title = selectedItems.size > 1 ? `Delete ${selectedItems.size} items?` : "Delete photo?";
+
+    showCustomConfirm(
+      title,
+      "Choose how you want to delete these items.",
+      [
+        {
+          text: 'Trash',
+          style: 'default',
+          onPress: async () => {
+            try {
+              for (const item of selectedMedia) {
+                try {
+                  await moveMediaToAppTrash(item);
+                } catch (e) {
+                  console.error('Calendar: Trash copy failed', e);
+                }
+              }
+              
+              const success = await MediaLibrary.deleteAssetsAsync(selectedIdsArray);
+              if (success) {
+                loadPhotosForDate(selectedDate);
+                exitSelectionMode();
+                showAlert('Success', `${selectedItems.size} items moved to trash`, null, 'success');
+              }
+            } catch (error) {
+              console.error('[Calendar] Trash error:', error);
+              loadPhotosForDate(selectedDate);
+              exitSelectionMode();
+            }
+          }
+        },
+        {
+          text: 'Permanently delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const success = await MediaLibrary.deleteAssetsAsync(selectedIdsArray);
+              if (success) {
+                loadPhotosForDate(selectedDate);
+                exitSelectionMode();
+              }
+            } catch (error) {
+              console.error('[Calendar] Permanent delete error:', error);
+              loadPhotosForDate(selectedDate);
+              exitSelectionMode();
+            }
+          }
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        }
+      ]
+    );
+  }, [selectedItems, dayPhotos, selectedDate, exitSelectionMode, showCustomConfirm, showAlert]);
 
   // Handle back button for selection mode
   useEffect(() => {
@@ -180,13 +264,20 @@ export default function CalendarScreen({ navigation }) {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
       {isSelectionMode ? (
         <View style={[styles.selectionHeader, { backgroundColor: colors.itemBackground }]}>
-          <TouchableOpacity onPress={exitSelectionMode} style={{ padding: 8 }}>
+          <TouchableOpacity onPress={exitSelectionMode} style={styles.cancelBtnSelection}>
             <Text style={{ color: colors.text, fontWeight: '600' }}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={[styles.title, { color: colors.text, fontSize: 18 }]}>
+          <Text style={[styles.selectionTitleText, { color: colors.text }]}>
             {selectedItems.size} selected
           </Text>
-          <View style={{ width: 60 }} />
+          <View style={styles.selectionActions}>
+            <TouchableOpacity onPress={handleShareSelected} style={styles.actionIcon}>
+              <Ionicons name="share-outline" size={24} color={colors.text} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleDeleteSelected} style={styles.actionIcon}>
+              <Ionicons name="trash-outline" size={24} color="#FF3B30" />
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
         <View style={styles.header}>
@@ -610,6 +701,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, 
     paddingVertical: 12,
     justifyContent: 'space-between'
+  },
+  cancelBtnSelection: {
+    padding: 8,
+  },
+  selectionTitleText: {
+    fontSize: 18,
+    fontWeight: '700',
+    flex: 1,
+    textAlign: 'center',
+  },
+  selectionActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  actionIcon: {
+    padding: 4,
   },
   selectionOverlay: { 
     ...StyleSheet.absoluteFillObject, 
