@@ -231,10 +231,7 @@ export default function VaultPasswordScreen({ route, onUnlock }) {
           <TouchableOpacity
             style={styles.forgotPasswordLink}
             onPress={() => {
-              showAlert(
-                'Forgot Password?',
-                'You can reset your vault password using security questions from Settings > Privacy & Security > Forgot Password.'
-              );
+              navigation.navigate('ForgotVaultPassword');
             }}
             activeOpacity={0.7}
           >

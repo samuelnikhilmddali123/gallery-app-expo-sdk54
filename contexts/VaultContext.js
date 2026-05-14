@@ -166,34 +166,39 @@ export const VaultProvider = ({ children }) => {
   };
 
   const deleteVault = async () => {
-    console.log('[VaultContext] Starting vault deletion...');
+    console.log('[VaultContext] Starting full vault reset...');
     try {
-      // 1. Reset local state immediately for UI responsiveness
+      // 1. Reset all local state immediately
       setIsVaultSetup(false);
       setIsVaultUnlocked(false);
       setVaultPassword(null);
       setSecurityQuestions(null);
       setVaultMedia([]);
 
-      // 2. Clear all secure store items
-      await Promise.all([
-        SecureStore.deleteItemAsync('vault_password'),
-        SecureStore.deleteItemAsync('vault_questions'),
-        SecureStore.deleteItemAsync('vault_setup_complete')
-      ]);
+      // 2. Clear SecureStore items individually to ensure each is attempted
+      const keys = ['vault_password', 'vault_questions', 'vault_setup_complete'];
+      for (const key of keys) {
+        try {
+          await SecureStore.deleteItemAsync(key);
+          console.log(`[VaultContext] Deleted SecureStore key: ${key}`);
+        } catch (e) {
+          console.error(`[VaultContext] Failed to delete SecureStore key ${key}:`, e);
+        }
+      }
       
-      // 3. Delete all vault files and metadata via service
-      // We do this after clearing secure storage so that even if file deletion fails, 
-      // the vault is effectively "removed" from the user's perspective.
-      await deleteVaultFiles();
+      // 3. Delete files via service
+      try {
+        await deleteVaultFiles();
+        console.log('[VaultContext] Vault files deleted successfully.');
+      } catch (e) {
+        console.error('[VaultContext] Failed to delete vault files:', e);
+      }
       
-      console.log('[VaultContext] Vault deletion successful.');
+      console.log('[VaultContext] Vault reset process completed.');
       return true;
     } catch (error) {
-      console.error('[VaultContext] Error during vault deletion:', error);
-      // Even if there was an error, we've cleared the password and setup flag,
-      // so we return true to indicate the vault is "gone" for the user.
-      return true; 
+      console.error('[VaultContext] Critical error during vault reset:', error);
+      return true; // Return true so UI can proceed, as state is already partially reset
     }
   };
 

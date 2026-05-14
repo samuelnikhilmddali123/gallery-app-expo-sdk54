@@ -385,6 +385,9 @@ export const deleteVault = async () => {
     // Clear metadata
     await AsyncStorage.removeItem(VAULT_METADATA_KEY);
 
+    // Clear cache
+    clearVaultCache();
+    
     return true;
   } catch (error) {
     console.error('Error deleting vault:', error);

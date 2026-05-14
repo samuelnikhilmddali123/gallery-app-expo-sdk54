@@ -130,10 +130,15 @@ const GlassMenu = ({ visible, onClose }) => {
                 label="Calendar" 
                 onPress={() => handleAction('Calendar')} 
               />
+              <MenuItem 
+                icon="images-outline" 
+                label="Albums" 
+                onPress={() => handleAction('Albums')} 
+              />
               {!isVaultSetup && (
                 <MenuItem 
                   icon="lock-closed-outline" 
-                  label="Setup Vault" 
+                  label="Vault" 
                   onPress={() => handleAction('VaultSetup')} 
                   color="#7B61FF"
                 />
@@ -144,15 +149,19 @@ const GlassMenu = ({ visible, onClose }) => {
                 onPress={() => handleAction('Trash')} 
                 color="#FF3B30"
               />
-              <MenuItem 
-                icon="trash-bin-outline" 
-                label="Trash" 
-                onPress={() => handleAction('Trash')} 
-                color="#FF3B30"
-              />
               
               <View style={[styles.divider, { backgroundColor: colors.text + '20' }]} />
               
+              <MenuItem 
+                icon="swap-vertical-outline" 
+                label="Sort By" 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  // Placeholder for sort logic
+                  onClose();
+                }} 
+              />
+
               <MenuItem 
                 icon={isDarkMode ? "moon" : "sunny"} 
                 label="Dark Mode" 
@@ -165,6 +174,12 @@ const GlassMenu = ({ visible, onClose }) => {
                     <View style={[styles.toggleCircle, { transform: [{ translateX: isDarkMode ? 12 : 0 }] }]} />
                   </View>
                 }
+              />
+
+              <MenuItem 
+                icon="settings-outline" 
+                label="Settings" 
+                onPress={() => handleAction('Settings')} 
               />
             </ScrollView>
           </SafeBlurView>

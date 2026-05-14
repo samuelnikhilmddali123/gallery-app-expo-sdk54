@@ -20,6 +20,10 @@ import * as Sharing from 'expo-sharing';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDialog } from '../contexts/DialogContext';
 import { moveMediaToAppTrash } from '../services/trashService';
+import GlassMenu from '../components/GlassMenu';
+import { useVault } from '../contexts/VaultContext';
+import { moveMediaToVault } from '../services/mediaService';
+import AnimatedRainbowSearchIcon from '../components/AnimatedRainbowSearchIcon';
 
 // --- CONFIGURATION ---
 const NUM_COLUMNS = 3;
@@ -68,7 +72,7 @@ const MediaItem = React.memo(({ item, backgroundColor, borderColor, onPress, onL
   );
 });
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, route }) {
   const { colors, isDarkMode } = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -84,11 +88,18 @@ export default function HomeScreen({ navigation }) {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState(new Set());
   const { showAlert, showCustomConfirm } = useDialog();
+  const { isVaultSetup, deleteVault, verifyPassword, unlockVault, addMediaToVaultContext } = useVault();
+
+  const selectionPurpose = route.params?.selectionPurpose;
+
+  // Menu State
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
 
   // --- REFS ---
   const endCursorRef = useRef(null);
   const hasNextPageRef = useRef(true);
   const isFetchingRef = useRef(false);
+  const searchInputRef = useRef(null);
 
   /**
    * 🛠️ Fetch Logic
@@ -138,6 +149,30 @@ export default function HomeScreen({ navigation }) {
       }
     })();
   }, [loadMedia]);
+
+  // --- VAULT SECRET DOOR ---
+  useEffect(() => {
+    if (isVaultSetup && searchQuery.length >= 4) {
+      const checkVaultGate = async () => {
+        const isValid = await verifyPassword(searchQuery);
+        if (isValid) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setSearchQuery('');
+          unlockVault();
+          navigation.navigate('VaultHome');
+        }
+      };
+      checkVaultGate();
+    }
+  }, [searchQuery, isVaultSetup, verifyPassword, unlockVault, navigation]);
+
+  // Handle Vault Addition Flow
+  useEffect(() => {
+    if (selectionPurpose === 'vaultAdd') {
+      setIsSelectionMode(true);
+      setSelectedItems(new Set());
+    }
+  }, [selectionPurpose]);
 
   /**
    * ⚡ Handlers
@@ -233,7 +268,108 @@ export default function HomeScreen({ navigation }) {
   const exitSelectionMode = useCallback(() => {
     setIsSelectionMode(false);
     setSelectedItems(new Set());
-  }, []);
+    if (selectionPurpose === 'vaultAdd') {
+      navigation.setParams({ selectionPurpose: undefined });
+    }
+  }, [selectionPurpose, navigation]);
+
+  const handleSearchBarLongPress = useCallback(() => {
+    if (!isVaultSetup) return;
+    
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    showCustomConfirm(
+      "Vault Options",
+      "Manage your secure vault settings.",
+      [
+        {
+          text: 'Forgot Password',
+          onPress: () => {
+            navigation.navigate('ForgotVaultPassword');
+          }
+        },
+        {
+          text: 'Reset Vault',
+          style: 'destructive',
+          onPress: () => {
+            showCustomConfirm(
+              "Reset Vault?",
+              "All files in your vault will be permanently deleted. This cannot be undone.",
+              [
+                {
+                  text: 'Cancel',
+                  style: 'cancel'
+                },
+                {
+                  text: 'Reset Everything',
+                  style: 'destructive',
+                  onPress: async () => {
+                    const success = await deleteVault();
+                    if (success) {
+                      showAlert("Vault Reset", "Your vault has been completely cleared. You can set it up again from the menu.", null, 'success');
+                    }
+                  }
+                }
+              ],
+              'error'
+            );
+          }
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        }
+      ],
+      'info'
+    );
+  }, [isVaultSetup, navigation, showCustomConfirm, deleteVault, showAlert]);
+
+  const handleVaultAddSelected = useCallback(async () => {
+    if (selectedItems.size === 0) return;
+    const selectedIds = Array.from(selectedItems);
+    const selectedMedia = assets.filter(a => selectedIds.includes(a.id));
+
+    showAlert(
+      'Move to Vault',
+      `Move ${selectedIds.length} items to your private vault? They will be removed from your gallery.`,
+      async () => {
+        try {
+          const movedVaultItems = [];
+          const idsToDelete = [];
+
+          // 1. Copy all to vault first (without deleting originals yet)
+          for (const item of selectedMedia) {
+            const vaultMetadata = await moveMediaToVault(item, false);
+            movedVaultItems.push(vaultMetadata);
+            idsToDelete.push(item.id.toString());
+          }
+          
+          // 2. Batch delete all originals in ONE system request
+          if (idsToDelete.length > 0) {
+            const success = await MediaLibrary.deleteAssetsAsync(idsToDelete);
+            
+            if (success) {
+              // Only update UI if deletion was successful
+              movedVaultItems.forEach(v => addMediaToVaultContext(v));
+              setAssets(prev => prev.filter(a => !selectedIds.includes(a.id)));
+              
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              exitSelectionMode();
+              navigation.navigate('VaultHome');
+            } else {
+              // User likely cancelled the deletion permission
+              showAlert('Cancelled', 'Items were copied to vault but not removed from gallery.', null, 'warning');
+              // We still navigate to vault so they can see the copies
+              navigation.navigate('VaultHome');
+            }
+          }
+        } catch (error) {
+          console.error('[Home] Vault move error:', error);
+          showAlert('Error', 'Failed to move items to vault.', null, 'error');
+        }
+      },
+      'confirm'
+    );
+  }, [selectedItems, assets, exitSelectionMode, showAlert, addMediaToVaultContext, navigation]);
 
   const handleShareSelected = useCallback(async () => {
     if (selectedItems.size === 0) return;
@@ -349,19 +485,38 @@ export default function HomeScreen({ navigation }) {
             {selectedItems.size} Selected
           </Text>
           <View style={styles.selectionActions}>
-            <TouchableOpacity onPress={handleShareSelected} style={styles.actionButton}>
-              <Ionicons name="share-outline" size={24} color={colors.text} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleDeleteSelected} style={styles.actionButton}>
-              <Ionicons name="trash-outline" size={24} color="#ff3b30" />
-            </TouchableOpacity>
+            {selectionPurpose === 'vaultAdd' ? (
+              <TouchableOpacity onPress={handleVaultAddSelected} style={styles.actionButton}>
+                <Ionicons name="lock-closed" size={24} color={colors.primary} />
+              </TouchableOpacity>
+            ) : (
+              <>
+                <TouchableOpacity onPress={handleShareSelected} style={styles.actionButton}>
+                  <Ionicons name="share-outline" size={24} color={colors.text} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleDeleteSelected} style={styles.actionButton}>
+                  <Ionicons name="trash-outline" size={24} color="#ff3b30" />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </View>
       ) : (
         <View style={styles.header}>
-          <View style={[styles.searchBar, { backgroundColor: isDarkMode ? '#222' : '#f0f0f0' }]}>
-            <Ionicons name="search" size={18} color={'#999'} style={{ marginRight: 8 }} />
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={() => searchInputRef.current?.focus()}
+            onLongPress={handleSearchBarLongPress}
+            delayLongPress={800}
+            style={[styles.searchBar, { backgroundColor: isDarkMode ? '#222' : '#f0f0f0' }]}
+          >
+            {isVaultSetup ? (
+              <AnimatedRainbowSearchIcon size={18} style={{ marginRight: 8 }} />
+            ) : (
+              <Ionicons name="search" size={18} color={'#999'} style={{ marginRight: 8 }} />
+            )}
             <TextInput
+              ref={searchInputRef}
               value={searchQuery}
               onChangeText={setSearchQuery}
               placeholder="Search photos..."
@@ -370,12 +525,12 @@ export default function HomeScreen({ navigation }) {
               autoCapitalize="none"
             />
             {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Ionicons name="close-circle" size={18} color={'#999'} />
               </TouchableOpacity>
             )}
-          </View>
-          <TouchableOpacity onPress={() => navigation.navigate('Settings')} style={styles.menuButton}>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setIsMenuVisible(true)} style={styles.menuButton}>
             <Ionicons name="menu-outline" size={28} color={colors.text} />
           </TouchableOpacity>
         </View>
@@ -420,6 +575,10 @@ export default function HomeScreen({ navigation }) {
           }
         />
       )}
+      <GlassMenu 
+        visible={isMenuVisible} 
+        onClose={() => setIsMenuVisible(false)} 
+      />
     </SafeAreaView>
   );
 }

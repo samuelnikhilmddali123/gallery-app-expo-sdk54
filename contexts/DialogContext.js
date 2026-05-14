@@ -99,8 +99,8 @@ export const DialogProvider = ({ children }) => {
         const wrappedActions = actions.map(action => ({
             ...action,
             onPress: () => {
-                if (action.onPress) action.onPress();
-                hideDialog(); // Auto close on any action
+                hideDialog(); // Hide current dialog FIRST
+                if (action.onPress) action.onPress(); // Then perform action (which might show a new dialog)
             }
         }));
         showDialog({ title, message, actions: wrappedActions, type: type || 'warning' });
