@@ -10,6 +10,8 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
@@ -17,13 +19,14 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Sharing from 'expo-sharing';
+import Animated, { FadeOut, LinearTransition } from 'react-native-reanimated';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDialog } from '../contexts/DialogContext';
 import { moveMediaToAppTrash } from '../services/trashService';
 import GlassMenu from '../components/GlassMenu';
 import { useVault } from '../contexts/VaultContext';
 import { moveMediaToVault } from '../services/mediaService';
-import AnimatedRainbowSearchIcon from '../components/AnimatedRainbowSearchIcon';
+import VaultPulse from '../components/VaultPulse';
 
 // --- CONFIGURATION ---
 const NUM_COLUMNS = 3;
@@ -40,35 +43,40 @@ const MediaItem = React.memo(({ item, backgroundColor, borderColor, onPress, onL
   }
 
   return (
-    <TouchableOpacity 
-      activeOpacity={0.7} 
-      onPress={() => onPress(item)}
-      onLongPress={() => onLongPress(item)}
-      style={[styles.itemContainer, { backgroundColor, borderColor }]}
+    <Animated.View 
+      layout={LinearTransition.springify().damping(20).stiffness(150)}
+      exiting={FadeOut.duration(300)}
     >
-      <Image
-        source={{ uri: item.uri }}
-        style={styles.image}
-        contentFit="cover"
-        transition={0}
-        cachePolicy="memory-disk"
-      />
-      
-      {/* Selection Overlay */}
-      {isSelected && (
-        <View style={styles.selectionOverlay}>
-          <View style={styles.checkBadge}>
-            <Ionicons name="checkmark" size={16} color="white" />
+      <TouchableOpacity 
+        activeOpacity={0.7} 
+        onPress={() => onPress(item)}
+        onLongPress={() => onLongPress(item)}
+        style={[styles.itemContainer, { backgroundColor, borderColor }]}
+      >
+        <Image
+          source={{ uri: item.uri }}
+          style={styles.image}
+          contentFit="cover"
+          transition={0}
+          cachePolicy="memory-disk"
+        />
+        
+        {/* Selection Overlay */}
+        {isSelected && (
+          <View style={styles.selectionOverlay}>
+            <View style={styles.checkBadge}>
+              <Ionicons name="checkmark" size={16} color="white" />
+            </View>
           </View>
-        </View>
-      )}
+        )}
 
-      {item.mediaType === 'video' && (
-        <View style={styles.videoIndicator}>
-          <Ionicons name="play" size={12} color="white" />
-        </View>
-      )}
-    </TouchableOpacity>
+        {item.mediaType === 'video' && (
+          <View style={styles.videoIndicator}>
+            <Ionicons name="play" size={12} color="white" />
+          </View>
+        )}
+      </TouchableOpacity>
+    </Animated.View>
   );
 });
 
@@ -88,7 +96,7 @@ export default function HomeScreen({ navigation, route }) {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedItems, setSelectedItems] = useState(new Set());
   const { showAlert, showCustomConfirm } = useDialog();
-  const { isVaultSetup, deleteVault, verifyPassword, unlockVault, addMediaToVaultContext } = useVault();
+  const { isVaultSetup, vaultMedia, deleteVault, verifyPassword, unlockVault, addMediaToVaultContext } = useVault();
 
   const selectionPurpose = route.params?.selectionPurpose;
 
@@ -100,6 +108,13 @@ export default function HomeScreen({ navigation, route }) {
   const hasNextPageRef = useRef(true);
   const isFetchingRef = useRef(false);
   const searchInputRef = useRef(null);
+
+  // --- INITIALIZATION ---
+  useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
 
   /**
    * 🛠️ Fetch Logic
@@ -349,6 +364,7 @@ export default function HomeScreen({ navigation, route }) {
             
             if (success) {
               // Only update UI if deletion was successful
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
               movedVaultItems.forEach(v => addMediaToVaultContext(v));
               setAssets(prev => prev.filter(a => !selectedIds.includes(a.id)));
               
@@ -411,6 +427,7 @@ export default function HomeScreen({ navigation, route }) {
               }
               const success = await MediaLibrary.deleteAssetsAsync(selectedIds);
               if (success) {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
                 setAssets(prev => prev.filter(a => !selectedIds.includes(a.id)));
                 exitSelectionMode();
               }
@@ -426,6 +443,7 @@ export default function HomeScreen({ navigation, route }) {
             try {
               const success = await MediaLibrary.deleteAssetsAsync(selectedIds);
               if (success) {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
                 setAssets(prev => prev.filter(a => !selectedIds.includes(a.id)));
                 exitSelectionMode();
               }
@@ -511,15 +529,16 @@ export default function HomeScreen({ navigation, route }) {
             style={[styles.searchBar, { backgroundColor: isDarkMode ? '#222' : '#f0f0f0' }]}
           >
             {isVaultSetup ? (
-              <AnimatedRainbowSearchIcon size={18} style={{ marginRight: 8 }} />
+              <VaultPulse vaultMedia={vaultMedia} />
             ) : (
               <Ionicons name="search" size={18} color={'#999'} style={{ marginRight: 8 }} />
             )}
+
             <TextInput
               ref={searchInputRef}
               value={searchQuery}
               onChangeText={setSearchQuery}
-              placeholder="Search photos..."
+              placeholder={isVaultSetup ? "Search memories..." : "Search photos..."}
               placeholderTextColor={'#999'}
               style={[styles.searchInput, { color: colors.text }]}
               autoCapitalize="none"
